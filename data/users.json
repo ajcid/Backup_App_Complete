@@ -1,0 +1,6 @@
+{
+    "cid": {
+        "password": "scrypt:32768:8:1$4vKLoEj0wgI9HXQ4$9f3d1e14438efda4ad3a81aceaeec131449ad6c88f41ad9f1bfe4dfaa1d30078f19a5ad8634898b73b483ca808e2f893ec21984668b524ff15a8d592392da8fb",
+        "is_dev": true
+    }
+}

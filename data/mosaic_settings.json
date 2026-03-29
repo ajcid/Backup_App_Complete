@@ -1,0 +1,213 @@
+{
+    "overview": {
+        "lateral": {
+            "orientation": 0,
+            "layout": "horizontal",
+            "max_images": 8,
+            "active_machines": {
+                "21": [
+                    "lateral"
+                ],
+                "22": [
+                    "lateral"
+                ],
+                "23": [
+                    "lateral"
+                ],
+                "24": [
+                    "lateral"
+                ],
+                "31": [
+                    "lateral"
+                ],
+                "32": [
+                    "lateral"
+                ],
+                "33": [
+                    "lateral"
+                ],
+                "34": [
+                    "lateral1",
+                    "lateral2"
+                ]
+            }
+        },
+        "fundo": {
+            "orientation": 0,
+            "layout": "horizontal",
+            "max_images": 8,
+            "active_machines": {
+                "21": [
+                    "fundo"
+                ],
+                "22": [
+                    "fundo"
+                ],
+                "23": [
+                    "fundo"
+                ],
+                "24": [
+                    "fundo"
+                ],
+                "31": [
+                    "fundo"
+                ],
+                "32": [
+                    "fundo"
+                ],
+                "33": [
+                    "fundo"
+                ],
+                "34": [
+                    "fundo1",
+                    "fundo2"
+                ]
+            }
+        }
+    },
+    "xml_config": {
+        "available_xml_fields": [
+            "DATE",
+            "DEFECTS",
+            "Image",
+            "NOM_ART",
+            "NUM_ART",
+            "NUM_CAM",
+            "NUM_MOULE"
+        ],
+        "selectedFields": {
+            "NOM_ART": "NOM_ART",
+            "NUM_MOULE": "NUM_MOULE"
+        }
+    },
+    "display_config": {
+        "orientation": 0,
+        "grid_columns": 8,
+        "grid_lines": 3,
+        "image_size": 185,
+        "max_images": 24,
+        "refresh_interval": 1,
+        "zoom_percentage": 500
+    },
+    "overlay_config": {
+        "top": "NOM_ART",
+        "bottom_left": "NUM_MOULE",
+        "bottom_right": "_file_timestamp_"
+    },
+    "filter_config": {
+        "NUM_CAM": {
+            "enabled": true,
+            "available_values": [
+                "11",
+                "13",
+                "14",
+                "21",
+                "25"
+            ],
+            "selected_values": [
+                "11",
+                "13",
+                "14",
+                "21",
+                "25"
+            ]
+        }
+    },
+    "linha_21": {
+        "xml_config": {
+            "available_xml_fields": [
+                "DATE",
+                "DEFECTS",
+                "Image",
+                "NOM_ART",
+                "NUM_ART",
+                "NUM_CAM",
+                "NUM_MOULE"
+            ],
+            "selectedFields": {
+                "NOM_ART": "NOM_ART",
+                "NUM_MOULE": "NUM_MOULE"
+            }
+        },
+        "display_config": {
+            "orientation": 0,
+            "grid_columns": 8,
+            "grid_lines": 3,
+            "image_size": 185,
+            "max_images": 24,
+            "refresh_interval": 1,
+            "zoom_percentage": 500
+        },
+        "overlay_config": {
+            "top": "NOM_ART",
+            "bottom_left": "NUM_MOULE",
+            "bottom_right": "_file_timestamp_"
+        },
+        "filter_config": {
+            "NUM_CAM": {
+                "enabled": true,
+                "available_values": [
+                    "11",
+                    "13",
+                    "14",
+                    "21",
+                    "25"
+                ],
+                "selected_values": [
+                    "11",
+                    "25"
+                ]
+            }
+        }
+    },
+    "linha_23": {
+        "xml_config": {
+            "available_xml_fields": [
+                "DATE",
+                "DEFECTS",
+                "Image",
+                "NOM_ART",
+                "NUM_ART",
+                "NUM_CAM",
+                "NUM_MOULE"
+            ],
+            "selectedFields": {
+                "NOM_ART": "NOM_ART",
+                "NUM_MOULE": "NUM_MOULE"
+            }
+        },
+        "display_config": {
+            "orientation": 0,
+            "grid_columns": 8,
+            "grid_lines": 3,
+            "image_size": 185,
+            "max_images": 24,
+            "refresh_interval": 1,
+            "zoom_percentage": 500
+        },
+        "overlay_config": {
+            "top": "NOM_ART",
+            "bottom_left": "NUM_MOULE",
+            "bottom_right": "_file_timestamp_"
+        },
+        "filter_config": {
+            "NUM_CAM": {
+                "enabled": true,
+                "available_values": [
+                    "11",
+                    "13",
+                    "14",
+                    "21",
+                    "25"
+                ],
+                "selected_values": [
+                    "11",
+                    "13",
+                    "14",
+                    "21",
+                    "25"
+                ]
+            }
+        }
+    }
+}

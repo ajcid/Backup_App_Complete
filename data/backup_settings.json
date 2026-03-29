@@ -1,0 +1,294 @@
+{
+    "ssd_path": "/volume2/ssd_mirror",
+    "mirror_source_path": "/volume1/Backup_Inspection_VN/Backup_iris",
+    "mirror_include_subfolders": true,
+    "ssd_retention_days": 5,
+    "hdd_retention_months": 6,
+    "scan_interval_sec": 10,
+    "turnos": {
+        "turno1": {
+            "inicio": "00:00",
+            "fim": "07:59"
+        },
+        "turno2": {
+            "inicio": "08:00",
+            "fim": "15:59"
+        },
+        "turno3": {
+            "inicio": "16:00",
+            "fim": "23:59"
+        }
+    },
+    "visao_global": {
+        "port_lateral": 5098,
+        "port_fundo": 5099,
+        "cycle_mode_active": true,
+        "cycle_time_sec": 30,
+        "mosaic_active": true,
+        "mosaic_lateral_active": true,
+        "mosaic_fundo_active": true
+    },
+    "linhas": {
+        "21": {
+            "lateral": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 21/lateral",
+                "dst": "E:\\backup teste\\Linha 21\\Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5004,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 21/lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_21/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 21/lateral",
+                "dst_test": "E:\\backup teste\\Linha 21\\Lateral"
+            },
+            "fundo": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 21/topo e fundo",
+                "dst": "E:\\backup teste\\Linha 21\\Fundo",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5005,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 21/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_21/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 21/topo e fundo",
+                "dst_test": "E:\\backup teste\\Linha 21\\Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 5,
+            "use_test_mode": true
+        },
+        "22": {
+            "lateral": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 22/lateral",
+                "dst": "E:\\backup teste\\Linha 22\\Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5006,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 22/lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_22/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 22/lateral",
+                "dst_test": "E:\\backup teste\\Linha 22\\Lateral"
+            },
+            "fundo": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 22/topo e fundo",
+                "dst": "E:\\backup teste\\Linha 22\\Fundo",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5007,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 22/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_22/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 22/topo e fundo",
+                "dst_test": "E:\\backup teste\\Linha 22\\Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 30,
+            "use_test_mode": true
+        },
+        "23": {
+            "lateral": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 23/lateral",
+                "dst": "E:\\backup teste\\Linha 23\\Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_active": true,
+                "mosaic_port": 5003,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 23/lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_23/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 23/lateral",
+                "dst_test": "E:\\backup teste\\Linha 23\\Lateral"
+            },
+            "fundo": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 23/topo e fundo",
+                "dst": "E:\\backup teste\\Linha_23\\Fundo",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_active": true,
+                "mosaic_port": 5002,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 23/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_23/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 23/topo e fundo",
+                "dst_test": "E:\\backup teste\\Linha_23\\Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 30,
+            "use_test_mode": true
+        },
+        "24": {
+            "lateral": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 24/lateral",
+                "dst": "E:\\backup teste\\Linha 24\\Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5008,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 24/lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_24/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 24/lateral",
+                "dst_test": "E:\\backup teste\\Linha 24\\Lateral"
+            },
+            "fundo": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 24/topo e fundo",
+                "dst": "E:\\backup teste\\Linha 24\\Fundo",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5009,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 24/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_24/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 24/topo e fundo",
+                "dst_test": "E:\\backup teste\\Linha 24\\Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 30,
+            "use_test_mode": true
+        },
+        "31": {
+            "lateral": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 31/Lateral",
+                "dst": "E:\\backup teste\\Linha 31\\Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5010,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 31/Lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_31/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 31/Lateral",
+                "dst_test": "E:\\backup teste\\Linha 31\\Lateral"
+            },
+            "fundo": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 31/topo e fundo",
+                "dst": "E:\\backup teste\\Linha 31\\Fundo",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5011,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 31/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_31/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 31/topo e fundo",
+                "dst_test": "E:\\backup teste\\Linha 31\\Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 30,
+            "use_test_mode": true
+        },
+        "32": {
+            "lateral": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 32/Lateral",
+                "dst": "E:\\backup teste\\Linha 32\\Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5012,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 32/Lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_32/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 32/Lateral",
+                "dst_test": "E:\\backup teste\\Linha 32\\Lateral"
+            },
+            "fundo": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 32/topo e fundo",
+                "dst": "E:\\backup teste\\Linha 32\\Fundo",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5013,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 32/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_32/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 32/topo e fundo",
+                "dst_test": "E:\\backup teste\\Linha 32\\Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 30,
+            "use_test_mode": true
+        },
+        "33": {
+            "lateral": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha  33/lateral",
+                "dst": "E:\\backup teste\\Linha 33\\Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5014,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha  33/lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_33/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha  33/lateral",
+                "dst_test": "E:\\backup teste\\Linha 33\\Lateral"
+            },
+            "fundo": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha  33/topo e fundo",
+                "dst": "E:\\backup teste\\Linha 33\\Fundo",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5015,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha  33/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_33/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha  33/topo e fundo",
+                "dst_test": "E:\\backup teste\\Linha 33\\Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 30,
+            "use_test_mode": true
+        },
+        "34": {
+            "lateral1": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 1/lateral",
+                "dst": "/backup teste/Linha 34/ramal 1/Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5016,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 1/lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_34/Ramal_1/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 1/lateral",
+                "dst_test": "/backup teste/Linha 34/ramal 1/Lateral"
+            },
+            "lateral2": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 2/lateral",
+                "dst": "/backup teste/Linha 34/ramal 2/Lateral",
+                "delete_source": false,
+                "backup_active": true,
+                "mosaic_port": 5018,
+                "mosaic_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 2/lateral",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_34/Ramal_2/Lateral",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 2/lateral",
+                "dst_test": "/backup teste/Linha 34/ramal 2/Lateral"
+            },
+            "fundo1": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 1/topo e fundo",
+                "dst": "/backup teste/Linha 34/ramal 1/Fundo",
+                "delete_source": true,
+                "mosaic_port": 5017,
+                "mosaic_active": true,
+                "backup_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 1/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_34/Ramal_1/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 1/topo e fundo",
+                "dst_test": "/backup teste/Linha 34/ramal 1/Fundo"
+            },
+            "fundo2": {
+                "src": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 2/topo e fundo",
+                "dst": "/backup teste/Linha 34/ramal 2/Fundo",
+                "delete_source": true,
+                "mosaic_port": 5019,
+                "mosaic_active": true,
+                "backup_active": true,
+                "src_prod": "/volume1/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 2/topo e fundo",
+                "dst_prod": "/volume1/Backup_Inspection_VN/Backup_iris/Linha_34/Ramal_2/Topo_Fundo",
+                "src_test": "//10.19.30.14/Backup_Inspection_VN/Remote_Link_Folders/linha 34/ramal 2/topo e fundo",
+                "dst_test": "/backup teste/Linha 34/ramal 2/Fundo"
+            },
+            "cycle_mode_active": false,
+            "cycle_time_sec": 30,
+            "use_test_mode": true
+        }
+    },
+    "mosaic_config_folder": "/CODE/nas/insp/data",
+    "log_file_path": "/CODE/nas/insp/data",
+    "mosaic_source_path": null,
+    "backup_enabled": true,
+    "article_analysis_path": "//10.19.30.14/Backup_Inspection_VN/Backup_iris"
+}

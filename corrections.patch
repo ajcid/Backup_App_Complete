@@ -1,0 +1,143 @@
+--- backup_app_complete.py
++++ backup_app_complete_fixed.py
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
+ """
+-Sistema Completo de Gestão de Imagens e Backup Versão Final com Sistema de Turnos, LEDs de Status e Exportação Avançada
++Sistema Completo de Gestão de Imagens e Backup Versão Final com Sistema de Turnos, LEDs de Status e Exportação Avançada
+ """
++import json
+ import os
+ import sys
+ import json as orig_json
+@@ -20,7 +21,10 @@ LOG_FILE = "/volume1/logs/backup_server.log"
+
+ # Garantir que diretórios existem
+ os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
++os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+ os.makedirs("/volume1/logs", exist_ok=True)
+
++# Endpoint principal
++@app.route('/')
++def index():
++    config = load_config()
++    return render_template_string(BACKUP_TEMPLATE, config_json=json.dumps(config))
+
+ # Variáveis globais para controlar threads
+ copy_threads = {}
+@@ -48,7 +52,7 @@ BACKUP_TEMPLATE = """
+   <script>
+-    // código anterior com paths fixos...
++    // Carregar configuração passada pelo servidor
+     const CONFIG = JSON.parse('{{ config_json | safe }}');
+
+-    function loadMachines() {
+-      fetch('/get_machines_list')
++    // Exemplo de uso: navegar diretórios dinamicamente
+     function loadDirectories() {
+-      fetch('/browse_directory', {
+-        method: 'POST',
+-        headers: {'Content-Type':'application/json'},
+-        body: JSON.stringify({path:'/volume1/inspecao_organizadas'})
++      fetch('/browse_directory', {
++        method:'POST',
++        headers:{'Content-Type':'application/json'},
++        body: JSON.stringify({path: CONFIG.mirror_source_path})
+       })
+       .then(r=>r.json())
+       .then(data=> displayDirectoryContents(data.contents))
+@@ -150,13 +154,15 @@ BACKUP_TEMPLATE = """
+     // Configuração de linhas
+     function loadMachines() {
+       fetch('/get_machines_list')
+-      .then(resp=>resp.json())
++      .then(resp=>resp.json())
+       .then(data=>{
+         const list = document.getElementById('machines-list');
+         list.innerHTML = '';
+         data.machines.forEach(machine=>{
+           list.innerHTML += `
+-            <div class="checkbox-item">
+-              <input type="checkbox" id="machine_${machine.key}" ${machine.backup_active?'checked':''}>
+-              <label for="machine_${machine.key}">${machine.label}</label>
+-            </div>
++            <div class="toggle-item">
++              <span>Linha ${machine.linha} - ${machine.maquina}</span>
++              <label class="switch">
++                <input type="checkbox"
++                       id="backup_${machine.linha}_${machine.maquina}"
++                       ${machine.backup_active?'checked':''}
++                       onchange="toggleBackup('${machine.linha}','${machine.maquina}',this.checked)">
++                <span class="slider"></span>
++              </label>
++            </div>`;
+         });
+       });
+     }
+@@ -200,6 +206,27 @@ BACKUP_TEMPLATE = """
+       window.onload = () => {
+         loadMachines();
+         updateAllServiceStatus();
++        loadDirectories();
+       };
+   </script>
+ </body>
+ </html>
++
++/* CSS para toggle switches */
++<style>
++.switch{position:relative;display:inline-block;width:50px;height:24px;}
++.switch input{opacity:0;width:0;height:0;}
++.slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#ccc;transition:.4s;border-radius:24px;}
++.slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background:#fff;transition:.4s;border-radius:50%;}
++input:checked+.slider{background-color:#4CAF50;}
++input:checked+.slider:before{transform:translateX(26px);}
++.toggle-item{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.1);}
++</style>
+---
+
+@@ -250,6 +277,20 @@ def load_config():
+     return {
+       "ssd_path": "/volume2/ssd_mirror",
+       "mirror_source_path": "/volume1/inspecao_organizadas",
++      "mirror_include_subfolders": True,
++      "ssd_retention_days": 5,
++      "hdd_retention_months": 6,
++      "scan_interval_sec": 10,
++      "linhas": {}
+     }
+
+ def save_config(config):
+@@ -350,7 +391,7 @@ def api_save_general_config():
+     config['hdd_retention_months'] = int(data.get('hdd_retention_months', config['hdd_retention_months']))
+     save_config(config)
+     return jsonify({'status':'success'})
+-
++  # Fim correção paths gerais
+
+ # Endpoints existentes...
+@@ -500,7 +541,7 @@ @app.route('/get_machines_list')
+ def get_machines_list():
+     """Obter lista de máquinas para exportação"""
+     try:
+-        config = load_config()
++        config = load_config()
+         machines=[]
+         for linha,linha_conf in config['linhas'].items():
+             for maq,maq_conf in linha_conf.items():
+@@ -510,7 +551,7 @@ def get_machines_list():
+                 'backup_active':maq_conf.get('backup_active',False)
+             })
+         return jsonify({'machines':machines})
+-    except Exception as e: return jsonify({'machines':[]})
++    except Exception as e: return jsonify({'machines':[],'error':str(e)})
+
+ @app.route('/toggle_backup',methods=['POST'])
+ def toggle_backup():
+@@ -520,7 +561,7 @@ def toggle_backup():
+     if save_config(config):
+         return jsonify({'status':'success','active':not cur})
+     return jsonify({'status':'error'})
+-
++# Fim patch

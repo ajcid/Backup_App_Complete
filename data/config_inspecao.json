@@ -1,0 +1,49 @@
+{
+    "nas_path_destino": "/volume1/inspecao_organizadas",
+    "ssd_path": "/volume2/ssd_mirror",
+    "ssd_retention_days": 5,
+    "linhas": {
+        "21": {
+            "lateral": "/volume1/inspecao_origem/linha21/lateral",
+            "fundo": "/volume1/inspecao_origem/linha21/fundo"
+        },
+        "22": {
+            "lateral": "/volume1/inspecao_origem/linha22/lateral",
+            "fundo": "/volume1/inspecao_origem/linha22/fundo"
+        },
+        "23": {
+            "lateral": "/volume1/inspecao_origem/linha23/lateral",
+            "fundo": "/volume1/inspecao_origem/linha23/fundo"
+        },
+        "24": {
+            "lateral": "/volume1/inspecao_origem/linha24/lateral",
+            "fundo": "/volume1/inspecao_origem/linha24/fundo"
+        },
+        "31": {
+            "lateral": "/volume1/inspecao_origem/linha31/lateral",
+            "fundo": "/volume1/inspecao_origem/linha31/fundo"
+        },
+        "32": {
+            "lateral": "/volume1/inspecao_origem/linha32/lateral",
+            "fundo": "/volume1/inspecao_origem/linha32/fundo"
+        },
+        "33": {
+            "lateral": "/volume1/inspecao_origem/linha33/lateral",
+            "fundo": "/volume1/inspecao_origem/linha33/fundo"
+        },
+        "34": {
+            "lateral1": "/volume1/inspecao_origem/linha34/lateral1",
+            "lateral2": "/volume1/inspecao_origem/linha34/lateral2",
+            "fundo1": "/volume1/inspecao_origem/linha34/fundo1",
+            "fundo2": "/volume1/inspecao_origem/linha34/fundo2"
+        }
+    },
+    "extensoes_validas": [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".bmp",
+        ".tiff"
+    ],
+    "intervalo_verificacao": 10
+}

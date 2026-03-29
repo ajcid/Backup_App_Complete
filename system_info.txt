@@ -1,0 +1,29 @@
+Sistema de Gestão de Imagens v2.0
+==================================
+
+Data de instalação: Sun Aug 31 08:11:41 PM GMT 2025
+Versão Python: Python 3.8.15
+Sistema operacional: Linux BA_iris_nas 5.10.55+ #72806 SMP Thu Sep 5 13:43:49 CST 2024 aarch64 GNU/Linux synology_rtd1619b_ds423
+
+Estrutura de pastas:
+- Origem: /volume1/inspecao_origem/linha{21-34}/
+- Destino: /volume1/inspecao_organizadas/
+- Backup: /volume1/backup_imagens/
+- SSD Mirror: /volume2/ssd_mirror/
+- Logs: /volume1/logs/
+
+Interfaces web:
+- Backup/Diagnóstico: http://:5580
+- Mosaicos: http://:8021-8034
+
+Comandos úteis:
+- start-inspection    (iniciar sistema)
+- stop-inspection     (parar sistema)
+- status-inspection   (ver status)
+- mosaic-line 21 start (controlo individual)
+
+Logs importantes:
+- Sistema: /volume1/logs/sistema_principal.log
+- Backup: /volume1/logs/backup_server.log
+- Mirror: /volume1/logs/mirror_ssd.log
+- Mosaicos: /volume1/logs/mosaic_*.log
