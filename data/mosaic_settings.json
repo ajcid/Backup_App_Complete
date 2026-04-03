@@ -181,7 +181,7 @@
             "grid_columns": 8,
             "grid_lines": 3,
             "image_size": 185,
-            "max_images": 24,
+            "max_images": 60,
             "refresh_interval": 1,
             "zoom_percentage": 500
         },

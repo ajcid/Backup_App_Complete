@@ -6,6 +6,9 @@ Gestão de Users e Sistema Dinâmico de Modos (Teste vs Produção) On-The-Fly.
 
 ATUALIZAÇÃO: Otimização extrema para NAS (Synology DS423).
 Uso de os.scandir nativo, pré-compilação Regex e limitação de I/O Thrashing.
+Adição do serviço de Backup PKIRIS, Históricos e Artigos com árvore automática e retentividade.
+Correção das rotas API do Mosaico e tags Cross-Origin.
+Adicionado arranque automático do portal de Criação Pen PKIRIS.
 """
 
 import os
@@ -78,6 +81,7 @@ stop_mirror_flag = False
 mosaic_processes = {}
 mosaic_lock = threading.RLock()
 public_portal_process = None
+pen_pkiris_process = None
 active_folders = {}
 last_day_reset = datetime.now().day
 files_copied_shift = {}
@@ -85,6 +89,14 @@ files_copied_day = {}
 counters_lock = threading.Lock()
 export_tasks = {}
 file_io_lock = threading.Lock()
+
+# Variáveis dos serviços adicionais (PKIRIS, Históricos, Artigos)
+pkiris_thread = None
+stop_pkiris_flag = False
+historicos_thread = None
+stop_historicos_flag = False
+artigos_thread = None
+stop_artigos_flag = False
 
 analysis_status = {
     'running': False, 
@@ -210,6 +222,12 @@ def load_config():
         "ssd_retention_days": 5,
         "hdd_retention_months": 6,
         "scan_interval_sec": 1,
+        "pkiris_retention_days": 5,
+        "pkiris_dst_root": "",
+        "historicos_retention_days": 365,
+        "historicos_dst_root": "",
+        "artigos_retention_days": 365,
+        "artigos_dst_root": "",
         "turnos": {
             "turno1": {"inicio": "06:00", "fim": "14:00"},
             "turno2": {"inicio": "14:00", "fim": "22:00"},
@@ -227,8 +245,8 @@ def load_config():
         "linhas": {
             "21": { 
                 "cycle_mode_active": False, "cycle_time_sec": 30, "use_test_mode": False,
-                "lateral": { "src": "", "dst": "", "src_prod": "", "dst_prod": "", "src_test": "", "dst_test": "", "backup_active": True, "delete_source": True, "mosaic_active": False, "mosaic_port": 5001 },
-                "fundo": { "src": "", "dst": "", "src_prod": "", "dst_prod": "", "src_test": "", "dst_test": "", "backup_active": True, "delete_source": True, "mosaic_active": False, "mosaic_port": 5002 }
+                "lateral": { "src": "", "dst": "", "src_prod": "", "dst_prod": "", "src_test": "", "dst_test": "", "pkiris_src": "", "historico_src": "", "artigo_src": "", "backup_active": True, "delete_source": True, "mosaic_active": False, "mosaic_port": 5001 },
+                "fundo": { "src": "", "dst": "", "src_prod": "", "dst_prod": "", "src_test": "", "dst_test": "", "pkiris_src": "", "historico_src": "", "artigo_src": "", "backup_active": True, "delete_source": True, "mosaic_active": False, "mosaic_port": 5002 }
             }
         },
         "mosaic_source_path": "/volume1/inspecao_organizadas"
@@ -375,6 +393,9 @@ LOGIN_TEMPLATE = r"""
         <div style="margin-top:20px;">
             <a href="/historico_externo" style="color: #667eea; text-decoration: none; font-weight: bold;">&#8594; {{ t('Aceder ao Portal Público de Histórico') }}</a>
         </div>
+        <div style="margin-top:10px;">
+            <a href="http://{{ request.host.split(':')[0] }}:5582" style="color: #8e44ad; text-decoration: none; font-weight: bold;">&#8594; {{ t('Portal Criação Pen PKIRIS') }}</a>
+        </div>
         {% if error %}<p class="error-message">{{ t(error) }}</p>{% endif %}
     </div>
 
@@ -397,7 +418,7 @@ BACKUP_TEMPLATE = r"""
 <head>
 <meta charset="UTF-8">
 <title>{{ t('Sistema de Gestão de Imagens - Backup Avançado') }}</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; color: #333; }
@@ -542,6 +563,9 @@ BACKUP_TEMPLATE = r"""
 <div class="container">
     <div class="tabs">
         <button class="tab active" onclick="showTab('configuracao')"><i class="fas fa-cog"></i> {{ t('Configuração') }}</button>
+        <button class="tab" onclick="showTab('backup_pkiris')"><i class="fas fa-file-archive"></i> {{ t('Backup PKIRIS') }}</button>
+        <button class="tab" onclick="showTab('backup_historicos')"><i class="fas fa-history"></i> {{ t('Backup Históricos') }}</button>
+        <button class="tab" onclick="showTab('backup_artigos')"><i class="fas fa-box-open"></i> {{ t('Backup Artigos') }}</button>
         <button class="tab" onclick="showTab('servicos')"><i class="fas fa-server"></i> {{ t('Gestão de Serviços') }}</button>
         <button class="tab" onclick="showTab('exportar')"><i class="fas fa-download"></i> {{ t('Exportar') }}</button>
         <button class="tab" onclick="showTab('diagnostics')"><i class="fas fa-chart-line"></i> {{ t('Diagnóstico') }}</button>
@@ -830,6 +854,205 @@ BACKUP_TEMPLATE = r"""
             <button type="button" class="btn btn-danger" onclick="stopAllServices()"><i class="fas fa-stop"></i> {{ t('Parar Todos os Serviços') }}</button>
         </div>
     </div>
+    
+    <div id="backup_pkiris" class="tab-content">
+        <div class="section">
+            <h3><i class="fas fa-file-archive"></i> {{ t('Configuração Global Backup PKIRIS') }}</h3>
+            <p>{{ t('Define a pasta base de destino. O sistema irá criar automaticamente subpastas para cada Linha e Máquina (/Linha_XX/Lateral).') }}</p>
+            <form id="pkirisConfigForm">
+                <div class="path-input-group">
+                    <label style="min-width: 200px; font-weight: bold;">{{ t('Retenção PKIRIS (dias):') }}</label>
+                    <input type="number" name="pkiris_retention_days" id="pkiris_retention_days" class="form-control" style="max-width: 150px;">
+                </div>
+                <div class="path-input-group" style="margin-bottom: 20px;">
+                    <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz PKIRIS:') }}</label>
+                    <input type="text" name="pkiris_dst_root" id="pkiris_dst_root" class="form-control">
+                    <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_dst_root')"><i class="fas fa-folder-open"></i></button>
+                </div>
+                
+                <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Onde a máquina gera os .pkiris)') }}</h4>
+                
+                {% for linha in ['21', '22', '23', '24', '31', '32', '33'] %}
+                    <div class="linha-card" style="border-left-color: #8e44ad;">
+                        <h4 style="color: #8e44ad; background: rgba(142, 68, 173, 0.1);">{{ t('Linha') }} {{ linha }}</h4>
+                        <div class="machine-section">
+                            <div class="path-input-group">
+                                <label style="min-width: 200px;">{{ t('Origem PKIRIS (Lateral):') }}</label>
+                                <input type="text" name="pkiris_src_{{ linha }}_lateral" id="pkiris_src_{{ linha }}_lateral" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                            <div class="path-input-group">
+                                <label style="min-width: 200px;">{{ t('Origem PKIRIS (Fundo):') }}</label>
+                                <input type="text" name="pkiris_src_{{ linha }}_fundo" id="pkiris_src_{{ linha }}_fundo" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+                
+                <div class="linha-card" style="border-left-color: #8e44ad;">
+                    <h4 style="color: #8e44ad; background: rgba(142, 68, 173, 0.1);">{{ t('Linha 34') }}</h4>
+                    <div class="ramal-container">
+                        {% for ramal in [1, 2] %}
+                        <div class="ramal">
+                            <h5>{{ t('Ramal') }} {{ ramal }}</h5>
+                            {% for maq in ['lateral', 'fundo'] %}
+                            {% set maquina = maq ~ ramal %}
+                            <div class="path-input-group">
+                                <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
+                                <input type="text" name="pkiris_src_34_{{ maquina }}" id="pkiris_src_34_{{ maquina }}" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configurações PKIRIS') }}</button>
+            </form>
+        </div>
+        
+        <div class="section" style="border-left-color: #27ae60;">
+            <h3><i class="fas fa-play-circle"></i> {{ t('Controlo do Serviço PKIRIS') }}</h3>
+            <p>{{ t('O serviço corre automaticamente em background para verificar novos ficheiros.') }}</p>
+            <button type="button" class="btn btn-primary" onclick="startPkirisBackup()"><i class="fas fa-play"></i> {{ t('Iniciar Backup PKIRIS') }}</button>
+            <button type="button" class="btn btn-danger" onclick="stopPkirisBackup()"><i class="fas fa-stop"></i> {{ t('Parar Backup PKIRIS') }}</button>
+            <span class="service-led" id="service_pkiris" title="{{ t('Status do serviço PKIRIS') }}"></span>
+        </div>
+    </div>
+    
+    <div id="backup_historicos" class="tab-content">
+        <div class="section">
+            <h3><i class="fas fa-history"></i> {{ t('Configuração Global Backup Históricos') }}</h3>
+            <p>{{ t('Define a pasta de destino raiz. A árvore criada será do tipo: /Linha_XX/Lateral/Mês/Dia/. Executa periodicamente (aos 55m).') }}</p>
+            <form id="historicosConfigForm">
+                <div class="path-input-group">
+                    <label style="min-width: 200px; font-weight: bold;">{{ t('Retenção Históricos (dias):') }}</label>
+                    <input type="number" name="historicos_retention_days" id="historicos_retention_days" class="form-control" style="max-width: 150px;" placeholder="365">
+                </div>
+                <div class="path-input-group" style="margin-bottom: 20px;">
+                    <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz Históricos:') }}</label>
+                    <input type="text" name="historicos_dst_root" id="historicos_dst_root" class="form-control">
+                    <button type="button" class="browse-btn" onclick="openFileBrowser('historicos_dst_root')"><i class="fas fa-folder-open"></i></button>
+                </div>
+                
+                <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Pastas dos Históricos)') }}</h4>
+                
+                {% for linha in ['21', '22', '23', '24', '31', '32', '33'] %}
+                    <div class="linha-card" style="border-left-color: #34495e;">
+                        <h4 style="color: #34495e; background: rgba(52, 73, 94, 0.1);">{{ t('Linha') }} {{ linha }}</h4>
+                        <div class="machine-section">
+                            <div class="path-input-group">
+                                <label style="min-width: 200px;">{{ t('Origem Histórico (Lateral):') }}</label>
+                                <input type="text" name="historico_src_{{ linha }}_lateral" id="historico_src_{{ linha }}_lateral" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                            <div class="path-input-group">
+                                <label style="min-width: 200px;">{{ t('Origem Histórico (Fundo):') }}</label>
+                                <input type="text" name="historico_src_{{ linha }}_fundo" id="historico_src_{{ linha }}_fundo" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+                
+                <div class="linha-card" style="border-left-color: #34495e;">
+                    <h4 style="color: #34495e; background: rgba(52, 73, 94, 0.1);">{{ t('Linha 34') }}</h4>
+                    <div class="ramal-container">
+                        {% for ramal in [1, 2] %}
+                        <div class="ramal">
+                            <h5>{{ t('Ramal') }} {{ ramal }}</h5>
+                            {% for maq in ['lateral', 'fundo'] %}
+                            {% set maquina = maq ~ ramal %}
+                            <div class="path-input-group">
+                                <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
+                                <input type="text" name="historico_src_34_{{ maquina }}" id="historico_src_34_{{ maquina }}" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configurações Históricos') }}</button>
+            </form>
+        </div>
+        
+        <div class="section" style="border-left-color: #27ae60;">
+            <h3><i class="fas fa-play-circle"></i> {{ t('Controlo do Serviço Históricos') }}</h3>
+            <button type="button" class="btn btn-primary" onclick="startHistoricosBackup()"><i class="fas fa-play"></i> {{ t('Iniciar Backup Históricos') }}</button>
+            <button type="button" class="btn btn-danger" onclick="stopHistoricosBackup()"><i class="fas fa-stop"></i> {{ t('Parar Backup Históricos') }}</button>
+            <span class="service-led" id="service_historicos" title="{{ t('Status do serviço Históricos') }}"></span>
+        </div>
+    </div>
+    
+    <div id="backup_artigos" class="tab-content">
+        <div class="section">
+            <h3><i class="fas fa-box-open"></i> {{ t('Configuração Global Backup Artigos') }}</h3>
+            <p>{{ t('Define a pasta de destino raiz. A árvore criada será do tipo: /Linha_XX/Lateral/Mês/Dia/. Executa periodicamente.') }}</p>
+            <form id="artigosConfigForm">
+                <div class="path-input-group">
+                    <label style="min-width: 200px; font-weight: bold;">{{ t('Retenção Artigos (dias):') }}</label>
+                    <input type="number" name="artigos_retention_days" id="artigos_retention_days" class="form-control" style="max-width: 150px;" placeholder="365">
+                </div>
+                <div class="path-input-group" style="margin-bottom: 20px;">
+                    <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz Artigos:') }}</label>
+                    <input type="text" name="artigos_dst_root" id="artigos_dst_root" class="form-control">
+                    <button type="button" class="browse-btn" onclick="openFileBrowser('artigos_dst_root')"><i class="fas fa-folder-open"></i></button>
+                </div>
+                
+                <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Pastas dos Artigos)') }}</h4>
+                
+                {% for linha in ['21', '22', '23', '24', '31', '32', '33'] %}
+                    <div class="linha-card" style="border-left-color: #d35400;">
+                        <h4 style="color: #d35400; background: rgba(211, 84, 0, 0.1);">{{ t('Linha') }} {{ linha }}</h4>
+                        <div class="machine-section">
+                            <div class="path-input-group">
+                                <label style="min-width: 200px;">{{ t('Origem Artigo (Lateral):') }}</label>
+                                <input type="text" name="artigo_src_{{ linha }}_lateral" id="artigo_src_{{ linha }}_lateral" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                            <div class="path-input-group">
+                                <label style="min-width: 200px;">{{ t('Origem Artigo (Fundo):') }}</label>
+                                <input type="text" name="artigo_src_{{ linha }}_fundo" id="artigo_src_{{ linha }}_fundo" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+                
+                <div class="linha-card" style="border-left-color: #d35400;">
+                    <h4 style="color: #d35400; background: rgba(211, 84, 0, 0.1);">{{ t('Linha 34') }}</h4>
+                    <div class="ramal-container">
+                        {% for ramal in [1, 2] %}
+                        <div class="ramal">
+                            <h5>{{ t('Ramal') }} {{ ramal }}</h5>
+                            {% for maq in ['lateral', 'fundo'] %}
+                            {% set maquina = maq ~ ramal %}
+                            <div class="path-input-group">
+                                <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
+                                <input type="text" name="artigo_src_34_{{ maquina }}" id="artigo_src_34_{{ maquina }}" class="form-control">
+                                <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configurações Artigos') }}</button>
+            </form>
+        </div>
+        
+        <div class="section" style="border-left-color: #27ae60;">
+            <h3><i class="fas fa-play-circle"></i> {{ t('Controlo do Serviço Artigos') }}</h3>
+            <button type="button" class="btn btn-primary" onclick="startArtigosBackup()"><i class="fas fa-play"></i> {{ t('Iniciar Backup Artigos') }}</button>
+            <button type="button" class="btn btn-danger" onclick="stopArtigosBackup()"><i class="fas fa-stop"></i> {{ t('Parar Backup Artigos') }}</button>
+            <span class="service-led" id="service_artigos" title="{{ t('Status do serviço Artigos') }}"></span>
+        </div>
+    </div>
 
     <div id="servicos" class="tab-content">
         <div class="section">
@@ -1109,6 +1332,15 @@ BACKUP_TEMPLATE = r"""
             const mirrorCheckbox = document.getElementById('mirror_include_subfolders');
             if (mirrorCheckbox) mirrorCheckbox.checked = config.mirror_include_subfolders !== false;
 
+            if (config.pkiris_retention_days !== undefined) document.getElementById('pkiris_retention_days').value = config.pkiris_retention_days;
+            if (config.pkiris_dst_root !== undefined) document.getElementById('pkiris_dst_root').value = config.pkiris_dst_root;
+
+            if (config.historicos_retention_days !== undefined) document.getElementById('historicos_retention_days').value = config.historicos_retention_days;
+            if (config.historicos_dst_root !== undefined) document.getElementById('historicos_dst_root').value = config.historicos_dst_root;
+
+            if (config.artigos_retention_days !== undefined) document.getElementById('artigos_retention_days').value = config.artigos_retention_days;
+            if (config.artigos_dst_root !== undefined) document.getElementById('artigos_dst_root').value = config.artigos_dst_root;
+
             if (config.turnos) {
                 Object.keys(config.turnos).forEach(turno => {
                     const inicioField = document.querySelector(`[name="${turno}_inicio"]`);
@@ -1153,6 +1385,10 @@ BACKUP_TEMPLATE = r"""
                         
                         const portInput = document.getElementById(`mosaic_port_${linha}_${maquina}`);
                         const deleteSourceField = document.getElementById(`delete_source_${linha}_${maquina}`);
+                        
+                        const pkirisSrcField = document.getElementById(`pkiris_src_${linha}_${maquina}`);
+                        const historicoSrcField = document.getElementById(`historico_src_${linha}_${maquina}`);
+                        const artigoSrcField = document.getElementById(`artigo_src_${linha}_${maquina}`);
 
                         if (origemProdField) origemProdField.value = maquinaConfig.src_prod || maquinaConfig.src || '';
                         if (destinoProdField) destinoProdField.value = maquinaConfig.dst_prod || maquinaConfig.dst || '';
@@ -1161,6 +1397,10 @@ BACKUP_TEMPLATE = r"""
                         
                         if (deleteSourceField) deleteSourceField.checked = maquinaConfig.delete_source !== false;
                         if (portInput && maquinaConfig.mosaic_port) portInput.value = maquinaConfig.mosaic_port;
+                        
+                        if (pkirisSrcField && maquinaConfig.pkiris_src !== undefined) pkirisSrcField.value = maquinaConfig.pkiris_src;
+                        if (historicoSrcField && maquinaConfig.historico_src !== undefined) historicoSrcField.value = maquinaConfig.historico_src;
+                        if (artigoSrcField && maquinaConfig.artigo_src !== undefined) artigoSrcField.value = maquinaConfig.artigo_src;
                     });
                 });
             }
@@ -1355,6 +1595,120 @@ BACKUP_TEMPLATE = r"""
             method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(configData)
         }).then(response => response.json()).then(res => { showAlert(res.message, res.status === 'success' ? 'success' : 'danger'); }).catch(error => { showAlert('{{ t("Erro de comunicação.") }}', 'danger'); });
     });
+    
+    document.getElementById('pkirisConfigForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const data = {
+            pkiris_retention_days: document.getElementById('pkiris_retention_days').value,
+            pkiris_dst_root: document.getElementById('pkiris_dst_root').value,
+            linhas: {}
+        };
+        
+        document.querySelectorAll('input[id^="pkiris_src_"]').forEach(input => {
+            const parts = input.id.split('_');
+            if(parts.length >= 4) {
+                const linha = parts[2];
+                const maquina = parts[3];
+                if (!data.linhas[linha]) data.linhas[linha] = {};
+                data.linhas[linha][maquina] = input.value;
+            }
+        });
+        
+        fetch('/save_pkiris_config', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+        }).then(res => res.json()).then(res => {
+            showAlert(res.message, res.status === 'success' ? 'success' : 'danger');
+        });
+    });
+
+    document.getElementById('historicosConfigForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const data = {
+            historicos_retention_days: document.getElementById('historicos_retention_days').value,
+            historicos_dst_root: document.getElementById('historicos_dst_root').value,
+            linhas: {}
+        };
+        
+        document.querySelectorAll('input[id^="historico_src_"]').forEach(input => {
+            const parts = input.id.split('_');
+            if(parts.length >= 4) {
+                const linha = parts[2];
+                const maquina = parts[3];
+                if (!data.linhas[linha]) data.linhas[linha] = {};
+                data.linhas[linha][maquina] = input.value;
+            }
+        });
+        
+        fetch('/save_historicos_config', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+        }).then(res => res.json()).then(res => {
+            showAlert(res.message, res.status === 'success' ? 'success' : 'danger');
+        });
+    });
+
+    document.getElementById('artigosConfigForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const data = {
+            artigos_retention_days: document.getElementById('artigos_retention_days').value,
+            artigos_dst_root: document.getElementById('artigos_dst_root').value,
+            linhas: {}
+        };
+        
+        document.querySelectorAll('input[id^="artigo_src_"]').forEach(input => {
+            const parts = input.id.split('_');
+            if(parts.length >= 4) {
+                const linha = parts[2];
+                const maquina = parts[3];
+                if (!data.linhas[linha]) data.linhas[linha] = {};
+                data.linhas[linha][maquina] = input.value;
+            }
+        });
+        
+        fetch('/save_artigos_config', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+        }).then(res => res.json()).then(res => {
+            showAlert(res.message, res.status === 'success' ? 'success' : 'danger');
+        });
+    });
+
+    function startPkirisBackup() {
+        fetch('/start_pkiris', {method: 'POST'}).then(r => r.json()).then(d => {
+            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
+            if (d.status === 'success') updateServiceLED('service_pkiris', true);
+        });
+    }
+    function stopPkirisBackup() {
+        fetch('/stop_pkiris', {method: 'POST'}).then(r => r.json()).then(d => {
+            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
+            if (d.status === 'success') updateServiceLED('service_pkiris', false);
+        });
+    }
+
+    function startHistoricosBackup() {
+        fetch('/start_historicos', {method: 'POST'}).then(r => r.json()).then(d => {
+            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
+            if (d.status === 'success') updateServiceLED('service_historicos', true);
+        });
+    }
+    function stopHistoricosBackup() {
+        fetch('/stop_historicos', {method: 'POST'}).then(r => r.json()).then(d => {
+            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
+            if (d.status === 'success') updateServiceLED('service_historicos', false);
+        });
+    }
+
+    function startArtigosBackup() {
+        fetch('/start_artigos', {method: 'POST'}).then(r => r.json()).then(d => {
+            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
+            if (d.status === 'success') updateServiceLED('service_artigos', true);
+        });
+    }
+    function stopArtigosBackup() {
+        fetch('/stop_artigos', {method: 'POST'}).then(r => r.json()).then(d => {
+            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
+            if (d.status === 'success') updateServiceLED('service_artigos', false);
+        });
+    }
 
     function openFileBrowser(inputId) {
         currentInputId = inputId;
@@ -1461,6 +1815,9 @@ BACKUP_TEMPLATE = r"""
             for (const [key, status] of Object.entries(data.mosaic_process_status || {})) updateServiceLED(`service_mosaic_${key}`, status.running);
             updateServiceLED('service_file_copying', data.file_copying_active || false);
             updateServiceLED('service_mirror_ssd', data.mirror_ssd_active || false);
+            updateServiceLED('service_pkiris', data.pkiris_active || false);
+            updateServiceLED('service_historicos', data.historicos_active || false);
+            updateServiceLED('service_artigos', data.artigos_active || false);
         }).catch(error => {});
     }
 
@@ -2559,6 +2916,263 @@ def mirror_ssd_service():
     
     logging.info("[MirrorSSD] Serviço parado")
 
+def pkiris_backup_service():
+    global stop_pkiris_flag
+    logging.info("[PKIRIS] Iniciando serviço de backup PKIRIS em background.")
+    
+    while not stop_pkiris_flag:
+        try:
+            config = load_config()
+            dst_root = config.get('pkiris_dst_root', '')
+            try:
+                retention_days = int(config.get('pkiris_retention_days', 5))
+            except:
+                retention_days = 5
+                
+            if not dst_root:
+                time.sleep(60)
+                continue
+
+            for linha, linha_cfg in config.get('linhas', {}).items():
+                if stop_pkiris_flag: break
+                for maquina, m_cfg in linha_cfg.items():
+                    if not isinstance(m_cfg, dict): continue
+                    
+                    src_path = m_cfg.get('pkiris_src', '')
+                    if not src_path or not os.path.exists(src_path):
+                        continue
+                    
+                    safe_maq = maquina.replace(" ", "_").capitalize()
+                    machine_dst = os.path.join(dst_root, f"Linha_{linha}", safe_maq)
+                    os.makedirs(machine_dst, exist_ok=True)
+
+                    try:
+                        with os.scandir(src_path) as entries:
+                            for entry in entries:
+                                if stop_pkiris_flag: break
+                                if entry.is_file() and entry.name.lower().endswith('.pkiris'):
+                                    dst_file = os.path.join(machine_dst, entry.name)
+                                    src_mtime = entry.stat().st_mtime
+                                    
+                                    needs_copy = True
+                                    if os.path.exists(dst_file):
+                                        dst_mtime = os.path.getmtime(dst_file)
+                                        if src_mtime <= dst_mtime + 2: 
+                                            needs_copy = False
+                                            
+                                    if needs_copy:
+                                        shutil.copy2(entry.path, dst_file)
+                                        logging.info(f"[PKIRIS] Copiado novo backup: {entry.name} -> {machine_dst}")
+                                        
+                        cutoff_time = time.time() - (retention_days * 86400)
+                        with os.scandir(machine_dst) as entries:
+                            for entry in entries:
+                                if entry.is_file() and entry.name.lower().endswith('.pkiris'):
+                                    if entry.stat().st_mtime < cutoff_time:
+                                        try:
+                                            os.remove(entry.path)
+                                            logging.info(f"[PKIRIS] Retenção aplicada, apagado: {entry.name}")
+                                        except Exception as e:
+                                            logging.error(f"[PKIRIS] Erro ao remover {entry.name}: {e}")
+
+                    except Exception as e:
+                        logging.error(f"[PKIRIS] Erro ao processar maquina {linha}/{maquina}: {e}")
+
+            for _ in range(60):
+                if stop_pkiris_flag: break
+                time.sleep(1)
+                
+        except Exception as e:
+            logging.error(f"[PKIRIS] Erro crítico no serviço: {e}")
+            time.sleep(60)
+            
+    logging.info("[PKIRIS] Serviço parado.")
+
+def start_pkiris_service():
+    global pkiris_thread, stop_pkiris_flag
+    if pkiris_thread and pkiris_thread.is_alive(): return True
+    stop_pkiris_flag = False
+    pkiris_thread = threading.Thread(target=pkiris_backup_service)
+    pkiris_thread.daemon = True
+    pkiris_thread.start()
+    return True
+
+def stop_pkiris_service():
+    global pkiris_thread, stop_pkiris_flag
+    stop_pkiris_flag = True
+    if pkiris_thread and pkiris_thread.is_alive():
+        pkiris_thread.join(timeout=5)
+
+def cleanup_retention_tree(dst_root, retention_days, service_name):
+    if retention_days <= 0: return
+    cutoff = datetime.now() - timedelta(days=retention_days)
+    try:
+        if not os.path.exists(dst_root): return
+        for linha_dir in os.listdir(dst_root):
+            linha_path = os.path.join(dst_root, linha_dir)
+            if not os.path.isdir(linha_path): continue
+            for maq_dir in os.listdir(linha_path):
+                maq_path = os.path.join(linha_path, maq_dir)
+                if not os.path.isdir(maq_path): continue
+                for month_dir in os.listdir(maq_path):
+                    month_path = os.path.join(maq_path, month_dir)
+                    if not os.path.isdir(month_path): continue
+                    for day_dir in os.listdir(month_path):
+                        day_path = os.path.join(month_path, day_dir)
+                        if not os.path.isdir(day_path): continue
+                        try:
+                            folder_date = datetime.strptime(f"{month_dir}-{day_dir}", "%Y-%m-%d")
+                            if folder_date < cutoff:
+                                shutil.rmtree(day_path)
+                                logging.info(f"[{service_name}] Retenção ({retention_days} dias) aplicada. Apagado: {day_path}")
+                        except ValueError:
+                            pass
+    except Exception as e:
+        logging.error(f"[{service_name}] Erro ao limpar retenção: {e}")
+
+def historicos_backup_service():
+    global stop_historicos_flag
+    logging.info("[HISTORICOS] Iniciando serviço de backup de Históricos em background.")
+    last_run_hour = -1
+    
+    while not stop_historicos_flag:
+        try:
+            now = datetime.now()
+            # Corre aos 55 minutos e certifica-se de que corre apenas uma vez nessa hora
+            if now.minute == 55 and now.hour != last_run_hour:
+                last_run_hour = now.hour
+                config = load_config()
+                dst_root = config.get('historicos_dst_root', '')
+                try:
+                    retention_days = int(config.get('historicos_retention_days', 365))
+                except:
+                    retention_days = 365
+                
+                if dst_root:
+                    for linha, linha_cfg in config.get('linhas', {}).items():
+                        if stop_historicos_flag: break
+                        for maquina, m_cfg in linha_cfg.items():
+                            if not isinstance(m_cfg, dict): continue
+                            src_path = m_cfg.get('historico_src', '')
+                            if not src_path or not os.path.exists(src_path): continue
+                            
+                            month_str = now.strftime("%Y-%m")
+                            day_str = now.strftime("%d")
+                            safe_maq = maquina.replace(" ", "_").capitalize()
+                            machine_dst = os.path.join(dst_root, f"Linha_{linha}", safe_maq, month_str, day_str)
+                            os.makedirs(machine_dst, exist_ok=True)
+                            
+                            try:
+                                with os.scandir(src_path) as entries:
+                                    for entry in entries:
+                                        if stop_historicos_flag: break
+                                        if entry.is_file():
+                                            file_mtime = datetime.fromtimestamp(entry.stat().st_mtime)
+                                            # Copia apenas os ficheiros modificados no dia corrente
+                                            if file_mtime.date() == now.date():
+                                                dst_file = os.path.join(machine_dst, entry.name)
+                                                if not os.path.exists(dst_file):
+                                                    shutil.copy2(entry.path, dst_file)
+                                                    logging.info(f"[HISTORICOS] Copiado: {entry.name} -> {machine_dst}")
+                            except Exception as e:
+                                logging.error(f"[HISTORICOS] Erro ao ler pasta {src_path}: {e}")
+                                
+                    cleanup_retention_tree(dst_root, retention_days, "HISTORICOS")
+                    
+        except Exception as e:
+            logging.error(f"[HISTORICOS] Erro crítico no serviço: {e}")
+            
+        for _ in range(30):
+            if stop_historicos_flag: break
+            time.sleep(1)
+
+    logging.info("[HISTORICOS] Serviço parado.")
+
+def artigos_backup_service():
+    global stop_artigos_flag
+    logging.info("[ARTIGOS] Iniciando serviço de backup de Artigos em background.")
+    
+    while not stop_artigos_flag:
+        try:
+            now = datetime.now()
+            config = load_config()
+            dst_root = config.get('artigos_dst_root', '')
+            try:
+                retention_days = int(config.get('artigos_retention_days', 365))
+            except:
+                retention_days = 365
+                
+            if dst_root:
+                for linha, linha_cfg in config.get('linhas', {}).items():
+                    if stop_artigos_flag: break
+                    for maquina, m_cfg in linha_cfg.items():
+                        if not isinstance(m_cfg, dict): continue
+                        src_path = m_cfg.get('artigo_src', '')
+                        if not src_path or not os.path.exists(src_path): continue
+                        
+                        month_str = now.strftime("%Y-%m")
+                        day_str = now.strftime("%d")
+                        safe_maq = maquina.replace(" ", "_").capitalize()
+                        machine_dst = os.path.join(dst_root, f"Linha_{linha}", safe_maq, month_str, day_str)
+                        os.makedirs(machine_dst, exist_ok=True)
+                        
+                        try:
+                            with os.scandir(src_path) as entries:
+                                for entry in entries:
+                                    if stop_artigos_flag: break
+                                    if entry.is_file():
+                                        file_mtime = datetime.fromtimestamp(entry.stat().st_mtime)
+                                        # Identifica o artigo corrente gravado no próprio dia
+                                        if file_mtime.date() == now.date():
+                                            dst_file = os.path.join(machine_dst, entry.name)
+                                            if not os.path.exists(dst_file):
+                                                shutil.copy2(entry.path, dst_file)
+                                                logging.info(f"[ARTIGOS] Copiado artigo corrente: {entry.name} -> {machine_dst}")
+                        except Exception as e:
+                            logging.error(f"[ARTIGOS] Erro ao ler pasta {src_path}: {e}")
+                            
+                cleanup_retention_tree(dst_root, retention_days, "ARTIGOS")
+                
+        except Exception as e:
+            logging.error(f"[ARTIGOS] Erro crítico no serviço: {e}")
+            
+        # Repousa 1 hora antes de verificar os artigos novamente
+        for _ in range(3600):
+            if stop_artigos_flag: break
+            time.sleep(1)
+
+    logging.info("[ARTIGOS] Serviço parado.")
+
+def start_historicos_service():
+    global historicos_thread, stop_historicos_flag
+    if historicos_thread and historicos_thread.is_alive(): return True
+    stop_historicos_flag = False
+    historicos_thread = threading.Thread(target=historicos_backup_service)
+    historicos_thread.daemon = True
+    historicos_thread.start()
+    return True
+
+def stop_historicos_service():
+    global historicos_thread, stop_historicos_flag
+    stop_historicos_flag = True
+    if historicos_thread and historicos_thread.is_alive():
+        historicos_thread.join(timeout=5)
+
+def start_artigos_service():
+    global artigos_thread, stop_artigos_flag
+    if artigos_thread and artigos_thread.is_alive(): return True
+    stop_artigos_flag = False
+    artigos_thread = threading.Thread(target=artigos_backup_service)
+    artigos_thread.daemon = True
+    artigos_thread.start()
+    return True
+
+def stop_artigos_service():
+    global artigos_thread, stop_artigos_flag
+    stop_artigos_flag = True
+    if artigos_thread and artigos_thread.is_alive():
+        artigos_thread.join(timeout=5)
+
 def start_file_copying_service():
     global copy_threads, stop_copy_flags
     config = load_config()
@@ -2693,6 +3307,39 @@ def stop_public_portal():
 
 atexit.register(stop_public_portal)
 
+def start_pen_pkiris_portal():
+    global pen_pkiris_process
+    if pen_pkiris_process and pen_pkiris_process.poll() is None:
+        return True
+    
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'criacao_pen_pkiris.py')
+    if not os.path.exists(script_path):
+        logging.error("Ficheiro criacao_pen_pkiris.py não encontrado!")
+        return False
+        
+    command = [sys.executable, script_path]
+    try:
+        pen_pkiris_process = subprocess.Popen(command)
+        logging.info("Portal Pen PKIRIS Iniciado no processo PID: " + str(pen_pkiris_process.pid))
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao iniciar portal Pen PKIRIS: {e}")
+        return False
+
+def stop_pen_pkiris_portal():
+    global pen_pkiris_process
+    if pen_pkiris_process:
+        if pen_pkiris_process.poll() is None:
+            try:
+                parent = psutil.Process(pen_pkiris_process.pid)
+                for child in parent.children(recursive=True): child.terminate()
+                parent.terminate()
+                parent.wait(timeout=5)
+            except: pen_pkiris_process.kill()
+        pen_pkiris_process = None
+
+atexit.register(stop_pen_pkiris_portal)
+
 def check_path_accessible(path):
     try:
         path = os.path.normpath(path.strip())
@@ -2743,6 +3390,7 @@ def get_connected_ips():
         port_map = {
             5580: _t("Painel de Gestão"),
             5581: _t("Portal de Histórico"),
+            5582: _t("Portal Pen PKIRIS"),
         }
         
         vg_cfg = config.get('visao_global', {})
@@ -2943,7 +3591,16 @@ def api_service_status():
     mosaic_process_status['Global_lateral'] = {'running': 'Global_lateral' in mosaic_processes and mosaic_processes['Global_lateral'].poll() is None}
     mosaic_process_status['Global_fundo'] = {'running': 'Global_fundo' in mosaic_processes and mosaic_processes['Global_fundo'].poll() is None}
     
-    return jsonify({'backup_services': backup_services, 'mosaic_process_status': mosaic_process_status, 'file_copying_active': any(t.is_alive() for t in copy_threads.values()), 'mirror_ssd_active': mirror_thread and mirror_thread.is_alive()})
+    return jsonify({
+        'backup_services': backup_services, 
+        'mosaic_process_status': mosaic_process_status, 
+        'file_copying_active': any(t.is_alive() for t in copy_threads.values()), 
+        'mirror_ssd_active': mirror_thread and mirror_thread.is_alive(),
+        'pkiris_active': pkiris_thread and pkiris_thread.is_alive(),
+        'historicos_active': historicos_thread and historicos_thread.is_alive(),
+        'artigos_active': artigos_thread and artigos_thread.is_alive(),
+        'pen_pkiris_active': pen_pkiris_process and pen_pkiris_process.poll() is None
+    })
 
 @app.route('/api/users', methods=['GET'])
 @login_required
@@ -3007,13 +3664,53 @@ def start_mirror_ssd_route():
     if start_mirror_ssd_service(): return jsonify({'status': 'success', 'message': _t('Iniciado.')})
     return jsonify({'status': 'error', 'message': _t('Erro.')})
 
+@app.route('/start_pkiris', methods=['POST'])
+@login_required
+def start_pkiris_route():
+    if start_pkiris_service(): return jsonify({'status': 'success', 'message': _t('Backup PKIRIS iniciado.')})
+    return jsonify({'status': 'error', 'message': _t('Erro.')})
+
+@app.route('/stop_pkiris', methods=['POST'])
+@login_required
+def stop_pkiris_route():
+    stop_pkiris_service()
+    return jsonify({'status': 'success', 'message': _t('Backup PKIRIS parado.')})
+
+@app.route('/start_historicos', methods=['POST'])
+@login_required
+def start_historicos_route():
+    if start_historicos_service(): return jsonify({'status': 'success', 'message': _t('Backup Históricos iniciado.')})
+    return jsonify({'status': 'error', 'message': _t('Erro.')})
+
+@app.route('/stop_historicos', methods=['POST'])
+@login_required
+def stop_historicos_route():
+    stop_historicos_service()
+    return jsonify({'status': 'success', 'message': _t('Backup Históricos parado.')})
+
+@app.route('/start_artigos', methods=['POST'])
+@login_required
+def start_artigos_route():
+    if start_artigos_service(): return jsonify({'status': 'success', 'message': _t('Backup Artigos iniciado.')})
+    return jsonify({'status': 'error', 'message': _t('Erro.')})
+
+@app.route('/stop_artigos', methods=['POST'])
+@login_required
+def stop_artigos_route():
+    stop_artigos_service()
+    return jsonify({'status': 'success', 'message': _t('Backup Artigos parado.')})
+
 @app.route('/stop_all_services', methods=['POST'])
 @login_required
 def api_stop_all_services():
     stop_file_copying_service()
     stop_mirror_ssd_service()
     stop_all_mosaic_processes()
+    stop_pkiris_service()
+    stop_historicos_service()
+    stop_artigos_service()
     stop_public_portal()
+    stop_pen_pkiris_portal()
     return jsonify({'status': 'success', 'message': _t('Todos os serviços parados.')})
 
 @app.route('/copy_status')
@@ -3123,6 +3820,81 @@ def save_lines_config_route():
     if save_config(config):
         log_user_action(session['username'], "Saved line configurations")
         return jsonify({'status': 'success', 'message': _t('Configurações salvas.')})
+    return jsonify({'status': 'error', 'message': _t('Erro ao salvar.')})
+
+@app.route('/save_pkiris_config', methods=['POST'])
+@login_required
+def save_pkiris_config():
+    data = request.get_json()
+    config = load_config()
+    
+    config['pkiris_retention_days'] = int(data.get('pkiris_retention_days', 5))
+    config['pkiris_dst_root'] = data.get('pkiris_dst_root', '')
+    
+    if 'linhas' not in config:
+        config['linhas'] = {}
+        
+    for linha, maquinas in data.get('linhas', {}).items():
+        if linha not in config['linhas']:
+            config['linhas'][linha] = {}
+        for maquina, src in maquinas.items():
+            if maquina not in config['linhas'][linha]:
+                config['linhas'][linha][maquina] = {}
+            config['linhas'][linha][maquina]['pkiris_src'] = src
+            
+    if save_config(config):
+        log_user_action(session['username'], "Saved PKIRIS Backup configurations")
+        return jsonify({'status': 'success', 'message': _t('Configurações PKIRIS salvas com sucesso.')})
+    return jsonify({'status': 'error', 'message': _t('Erro ao salvar.')})
+
+@app.route('/save_historicos_config', methods=['POST'])
+@login_required
+def save_historicos_config():
+    data = request.get_json()
+    config = load_config()
+    
+    config['historicos_retention_days'] = int(data.get('historicos_retention_days', 365))
+    config['historicos_dst_root'] = data.get('historicos_dst_root', '')
+    
+    if 'linhas' not in config:
+        config['linhas'] = {}
+        
+    for linha, maquinas in data.get('linhas', {}).items():
+        if linha not in config['linhas']:
+            config['linhas'][linha] = {}
+        for maquina, src in maquinas.items():
+            if maquina not in config['linhas'][linha]:
+                config['linhas'][linha][maquina] = {}
+            config['linhas'][linha][maquina]['historico_src'] = src
+            
+    if save_config(config):
+        log_user_action(session['username'], "Saved Historicos Backup configurations")
+        return jsonify({'status': 'success', 'message': _t('Configurações Históricos salvas com sucesso.')})
+    return jsonify({'status': 'error', 'message': _t('Erro ao salvar.')})
+
+@app.route('/save_artigos_config', methods=['POST'])
+@login_required
+def save_artigos_config():
+    data = request.get_json()
+    config = load_config()
+    
+    config['artigos_retention_days'] = int(data.get('artigos_retention_days', 365))
+    config['artigos_dst_root'] = data.get('artigos_dst_root', '')
+    
+    if 'linhas' not in config:
+        config['linhas'] = {}
+        
+    for linha, maquinas in data.get('linhas', {}).items():
+        if linha not in config['linhas']:
+            config['linhas'][linha] = {}
+        for maquina, src in maquinas.items():
+            if maquina not in config['linhas'][linha]:
+                config['linhas'][linha][maquina] = {}
+            config['linhas'][linha][maquina]['artigo_src'] = src
+            
+    if save_config(config):
+        log_user_action(session['username'], "Saved Artigos Backup configurations")
+        return jsonify({'status': 'success', 'message': _t('Configurações Artigos salvas com sucesso.')})
     return jsonify({'status': 'error', 'message': _t('Erro ao salvar.')})
 
 @app.route('/save_mosaic_config', methods=['POST'])
@@ -3341,8 +4113,12 @@ def start_all():
     log_user_action(session['username'], "Issued START ALL services")
     start_file_copying_service()
     start_mirror_ssd_service()
+    start_pkiris_service()
+    start_historicos_service()
+    start_artigos_service()
     start_all_active_mosaics()
     start_public_portal()
+    start_pen_pkiris_portal()
     return jsonify({'status': 'success', 'message': _t('Iniciados.')})
 
 @app.route('/stop_all', methods=['POST'])
@@ -3351,8 +4127,12 @@ def stop_all():
     log_user_action(session['username'], "Issued STOP ALL services")
     stop_file_copying_service()
     stop_mirror_ssd_service()
+    stop_pkiris_service()
+    stop_historicos_service()
+    stop_artigos_service()
     stop_all_mosaic_processes()
     stop_public_portal()
+    stop_pen_pkiris_portal()
     return jsonify({'status': 'success', 'message': _t('Parados.')})
 
 @app.route('/diagnostics')
@@ -3372,7 +4152,11 @@ def diagnostics():
             'Mirror SSD': mirror_thread and mirror_thread.is_alive(),
             'Cópia de Arquivos': any(t.is_alive() for t in copy_threads.values()),
             'Mosaicos': any(p.poll() is None for p in mosaic_processes.values()),
-            'Portal Público': public_portal_process and public_portal_process.poll() is None
+            'Backup PKIRIS': pkiris_thread and pkiris_thread.is_alive(),
+            'Backup Históricos': historicos_thread and historicos_thread.is_alive(),
+            'Backup Artigos': artigos_thread and artigos_thread.is_alive(),
+            'Portal Público': public_portal_process and public_portal_process.poll() is None,
+            'Portal Pen PKIRIS': pen_pkiris_process and pen_pkiris_process.poll() is None
         },
         'total_shift_jpg': total_s_jpg, 'total_shift_xml': total_s_xml,
         'total_day_jpg': total_d_jpg, 'total_day_xml': total_d_xml
@@ -3422,7 +4206,11 @@ def initial_startup():
     start_all_active_mosaics()
     start_file_copying_service()
     start_mirror_ssd_service()
+    start_pkiris_service()
+    start_historicos_service()
+    start_artigos_service()
     start_public_portal()
+    start_pen_pkiris_portal()
     logging.info("Inicialização concluída.")
 
 if __name__ == '__main__':
