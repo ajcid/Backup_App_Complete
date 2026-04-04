@@ -6694,12 +6694,48 @@ def get_ip_address():
     finally:
         s.close()
     return ip
+# Inicializa a variável global imediatamente antes das funções para garantir que o Python a encontra
+ssh_terminals_process = None
+
+def start_ssh_terminals_portal():
+    global ssh_terminals_process
+    if ssh_terminals_process and ssh_terminals_process.poll() is None:
+        return True
+    
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gestor_terminais_ssh.py')
+    if not os.path.exists(script_path):
+        logging.error("Ficheiro gestor_terminais_ssh.py não encontrado!")
+        return False
+        
+    command = [sys.executable, script_path]
+    try:
+        ssh_terminals_process = subprocess.Popen(command)
+        logging.info("Portal Gestor SSH Iniciado no processo PID: " + str(ssh_terminals_process.pid))
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao iniciar portal Gestor SSH: {e}")
+        return False
+
+def stop_ssh_terminals_portal():
+    global ssh_terminals_process
+    if ssh_terminals_process:
+        if ssh_terminals_process.poll() is None:
+            try:
+                parent = psutil.Process(ssh_terminals_process.pid)
+                for child in parent.children(recursive=True): child.terminate()
+                parent.terminate()
+                parent.wait(timeout=5)
+            except: ssh_terminals_process.kill()
+        ssh_terminals_process = None
+
+atexit.register(stop_ssh_terminals_portal)
 
 if __name__ == '__main__':
     pid = str(os.getpid())
     pid_file = os.path.join(BASE_DIR, "backup_server.pid")
     with open(pid_file, 'w') as f: f.write(pid)
     
+    start_ssh_terminals_portal()
     start_file_copying_service()
     start_mirror_ssd_service()
     start_all_active_mosaics()
@@ -6715,6 +6751,7 @@ if __name__ == '__main__':
     logging.info(f"👉 Acesse o Painel de Controlo: http://{local_ip}:5580")
     logging.info(f"👉 Portal Público (Histórico):  http://{local_ip}:5581")
     logging.info(f"👉 Portal Pen PKIRIS:           http://{local_ip}:5582")
+    logging.info(f"👉 Gestor Terminais SSH:        http://{local_ip}:5583")
     logging.info("=====================================================")
     
     app.run(host='0.0.0.0', port=5580, threaded=True, debug=False)

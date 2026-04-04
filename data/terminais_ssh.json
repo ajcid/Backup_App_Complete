@@ -1,0 +1,13 @@
+{
+    "192.168.1.156": {
+        "name": "Terminal Linha 24",
+        "username": "pi",
+        "password": "cmFzcGJlcnJ5",
+        "config_state": {
+            "screensaver": "off",
+            "rotation": "90",
+            "network": "dhcp",
+            "auto_reconnect": "on"
+        }
+    }
+}
