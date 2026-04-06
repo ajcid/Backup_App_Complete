@@ -1,0 +1,1 @@
+This project is made to backup the images captured by IRIS inspection machines and make a webpage that shows a set of images in a mosaic form, reading and ovelaping the xml data according to each image also identifies form witch camera.
