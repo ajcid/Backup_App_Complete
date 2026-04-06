@@ -6,8 +6,8 @@ e configurar o sistema operativo (Hostname, Rotação, Screensaver, IP Fixo/DHCP
 diretamente a partir de uma interface Web unificada.
 Inclui Scanner de Rede Multi-Thread, Lista Automática de URLs de Mosaico (Lida do JSON), 
 leitura em tempo real do status corrente, teste de acessibilidade do URL (LED),
-Diagnóstico Avançado de Hardware e Proteção Read-Only do Cartão SD.
-Corre num processo isolado (Porta 5583) para estabilidade da NAS.
+Diagnóstico Avançado de Hardware (Gráficos em Tempo Real e Gestor de Tarefas) e Proteção Read-Only do Cartão SD.
+Permite também a substituição do Boot Splash por um Vídeo MP4 com rotação automática.
 """
 
 import os
@@ -127,6 +127,7 @@ HTML_TEMPLATE = r"""
     <meta charset="UTF-8">
     <title>Gestor de Terminais SSH</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e2f; color: #e0e0e0; min-height: 100vh; overflow-x: hidden; }
@@ -251,7 +252,7 @@ HTML_TEMPLATE = r"""
             
             <div id="scan_results" style="display: none; margin-bottom: 1.5rem; background: #1e1e2f; padding: 10px; border-radius: 6px; border: 1px dashed #f1fa8c;">
                 <h4 style="color: #f1fa8c; margin-bottom: 10px; font-size: 0.9rem;"><i class="fas fa-network-wired"></i> Terminais SSH Encontrados</h4>
-                <div id="scan_list" style="display: flex; flex-direction: column; gap: 5px; max-height: 180px; overflow-y: auto;"></div>
+                <div id="scan_list" style="display: flex; flex-direction: column; gap: 5px; max-height: 250px; overflow-y: auto;"></div>
             </div>
 
             <form id="addTerminalForm">
@@ -330,6 +331,31 @@ HTML_TEMPLATE = r"""
                             <input type="text" id="cfg_ntp_input" class="form-control" placeholder="ex: pool.ntp.org">
                             <button class="btn btn-warning cfg-btn" onclick="applyRemoteConfig('ntp', document.getElementById('cfg_ntp_input').value)"><i class="fas fa-server"></i> NTP</button>
                         </div>
+                        
+                        <h4 style="color: #f8f8f2; margin-bottom: 10px; font-size: 1rem; border-bottom: 1px solid #44475a; padding-bottom: 5px; margin-top: 20px;"><i class="fas fa-info-circle"></i> Estado Atual da Rede</h4>
+                        <div style="background: #1e1e2f; padding: 10px; border-radius: 6px; border: 1px solid #6272a4;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px; border-bottom: 1px dashed #44475a; padding-bottom: 5px;">
+                                <span style="color: #6272a4; font-size: 0.85rem;">IP Atual:</span>
+                                <span id="info_real_ip" style="color: #50fa7b; font-family: monospace; font-weight: bold; font-size: 0.9rem;">A ler...</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px; border-bottom: 1px dashed #44475a; padding-bottom: 5px;">
+                                <span style="color: #6272a4; font-size: 0.85rem;">Subnet (Máscara):</span>
+                                <span id="info_real_subnet" style="color: #50fa7b; font-family: monospace; font-size: 0.9rem;">A ler...</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px; border-bottom: 1px dashed #44475a; padding-bottom: 5px;">
+                                <span style="color: #6272a4; font-size: 0.85rem;">Gateway (Router):</span>
+                                <span id="info_real_gw" style="color: #f8f8f2; font-family: monospace; font-size: 0.9rem;">A ler...</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px; border-bottom: 1px dashed #44475a; padding-bottom: 5px;">
+                                <span style="color: #6272a4; font-size: 0.85rem;">DNS:</span>
+                                <span id="info_real_dns" style="color: #f8f8f2; font-family: monospace; font-size: 0.9rem;">A ler...</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="color: #6272a4; font-size: 0.85rem;">Rede Wi-Fi (SSID):</span>
+                                <span id="info_real_wifi" style="color: #8be9fd; font-family: monospace; font-weight: bold; font-size: 0.9rem;">A ler...</span>
+                            </div>
+                        </div>
+
                     </div>
 
                     <div>
@@ -346,6 +372,16 @@ HTML_TEMPLATE = r"""
                         <div class="btn-group">
                             <button class="btn btn-secondary cfg-btn" id="btn_ro_on" onclick="applyRemoteConfig('readonly', 'on')" title="Evita corromper cartão se faltar a luz"><i class="fas fa-lock"></i> Ligar Read-Only</button>
                             <button class="btn btn-danger cfg-btn" id="btn_ro_off" onclick="applyRemoteConfig('readonly', 'off')" title="Permite fazer atualizações"><i class="fas fa-unlock"></i> Desligar Read-Only</button>
+                        </div>
+
+                        <h4 style="color: #f8f8f2; margin-bottom: 10px; font-size: 1rem; border-bottom: 1px solid #44475a; padding-bottom: 5px; margin-top: 15px;"><i class="fas fa-film"></i> Vídeo de Arranque (Boot Splash)</h4>
+                        <div style="background: #1e1e2f; padding: 10px; border-radius: 6px; border: 1px solid #6272a4;">
+                            <p style="color: #6272a4; font-size: 0.8rem; margin-bottom: 10px;">Substitua o splash inicial por um MP4. <b>A rotação será aplicada automaticamente com base na config do ecrã.</b></p>
+                            <div class="input-btn-group" style="margin-bottom: 10px;">
+                                <input type="file" id="cfg_boot_video" accept="video/mp4" class="form-control" style="padding: 0.5rem;">
+                                <button class="btn btn-warning" onclick="uploadBootVideo()"><i class="fas fa-upload"></i> Enviar</button>
+                            </div>
+                            <button class="btn btn-danger" onclick="applyRemoteConfig('remove_bootvideo', 'none')" style="width:100%;"><i class="fas fa-trash"></i> Remover Vídeo e Restaurar</button>
                         </div>
 
                         <h4 style="color: #f8f8f2; margin-bottom: 10px; font-size: 1rem; border-bottom: 1px solid #44475a; padding-bottom: 5px; display: flex; align-items: center; margin-top:15px;">
@@ -369,7 +405,8 @@ HTML_TEMPLATE = r"""
                         </div>
 
                         <div id="static_ip_form" style="display: none; background: #1e1e2f; padding: 10px; border-radius: 6px; border: 1px solid #6272a4; margin-bottom: 10px;">
-                            <div class="form-group"><label>Novo IP Fixo (ex: 192.168.1.100/24)</label><input type="text" id="cfg_static_ip" class="form-control" placeholder="192.168.1.100/24"></div>
+                            <div class="form-group"><label>Novo IP Fixo</label><input type="text" id="cfg_static_ip" class="form-control" placeholder="192.168.1.100"></div>
+                            <div class="form-group"><label>Subnet (Máscara ex: 255.255.255.0)</label><input type="text" id="cfg_static_subnet" class="form-control" placeholder="255.255.255.0" value="255.255.255.0"></div>
                             <div class="form-group"><label>Gateway (Router)</label><input type="text" id="cfg_static_gw" class="form-control" placeholder="192.168.1.1"></div>
                             <div class="form-group"><label>DNS (ex: 8.8.8.8)</label><input type="text" id="cfg_static_dns" class="form-control" placeholder="8.8.8.8"></div>
                             <button class="btn btn-warning" onclick="applyRemoteConfig('net', 'static')"><i class="fas fa-paper-plane"></i> Validar e Enviar IP Fixo</button>
@@ -429,11 +466,11 @@ HTML_TEMPLATE = r"""
     </div>
 
     <div id="hwModal" class="modal">
-        <div class="modal-content modal-content-small">
-            <span class="close-modal" onclick="document.getElementById('hwModal').style.display='none'">&times;</span>
+        <div class="modal-content modal-content-small" style="max-width: 900px;">
+            <span class="close-modal" onclick="closeHwModal()">&times;</span>
             <h3 style="color: #8be9fd; margin-top: 0; text-align: left;"><i class="fas fa-microchip"></i> Diagnóstico de Hardware: <span id="hw_modal_title" style="color:#f8f8f2;"></span></h3>
             
-            <div id="hw_loading" style="color: #f1fa8c; padding: 20px; text-align: center;"><i class="fas fa-spinner fa-spin"></i> A ler sensores do Raspberry Pi via SSH...</div>
+            <div id="hw_loading" style="color: #f1fa8c; padding: 20px; text-align: center;"><i class="fas fa-spinner fa-spin"></i> A ligar ao terminal e iniciar recolha de telemetria...</div>
             
             <div id="hw_data_grid" style="display: none; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; text-align: left;">
                 <div class="panel" style="padding: 1rem; background: #383a59; border: 1px solid #6272a4;">
@@ -445,7 +482,7 @@ HTML_TEMPLATE = r"""
                     <p id="hw_cpu" style="font-size: 1.3rem; font-weight: bold;"></p>
                 </div>
                 <div class="panel" style="padding: 1rem; background: #383a59; border: 1px solid #6272a4;">
-                    <h4 style="color: #8be9fd; margin-bottom: 5px;"><i class="fas fa-memory"></i> Memória RAM</h4>
+                    <h4 style="color: #8be9fd; margin-bottom: 10px;"><i class="fas fa-memory"></i> Memória RAM</h4>
                     <p id="hw_ram" style="font-size: 1.2rem; font-weight: bold;"></p>
                 </div>
                 <div class="panel" style="padding: 1rem; background: #383a59; border: 1px solid #6272a4;">
@@ -457,11 +494,46 @@ HTML_TEMPLATE = r"""
                     <p id="hw_uptime" style="font-size: 1.2rem; font-weight: bold;"></p>
                 </div>
             </div>
+
+            <div id="hw_charts_area" style="display:none; margin-top: 20px;">
+                <div style="background: #383a59; padding: 10px; border-radius: 8px; border: 1px solid #6272a4; margin-bottom: 15px; height: 200px;">
+                    <canvas id="hwChart"></canvas>
+                </div>
+                <h4 style="color: #8be9fd; margin-bottom: 10px; text-align: left;"><i class="fas fa-list"></i> Gestor de Tarefas (Top 10 Processos)</h4>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; color: #f8f8f2; background: #383a59; border-radius: 8px; overflow: hidden; border: 1px solid #6272a4;">
+                        <thead style="background: #282a36;">
+                            <tr style="border-bottom: 1px solid #6272a4; color: #bd93f9;">
+                                <th style="padding: 10px;">PID</th>
+                                <th style="padding: 10px;">Utilizador</th>
+                                <th style="padding: 10px;">% CPU</th>
+                                <th style="padding: 10px;">% RAM</th>
+                                <th style="padding: 10px;">Comando Executado</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hw_processes_tbody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
         </div>
     </div>
 
     <script>
         let lastUptimeFetch = {}; 
+        let hwChartInstance = null;
+        let hwPollInterval = null;
+        const HW_POLL_RATE = 3000;
+        let hwChartData = {
+            labels: [],
+            datasets: [
+                { label: 'Uso de CPU (%)', borderColor: '#ff5555', backgroundColor: 'rgba(255, 85, 85, 0.1)', data: [], fill: true, tension: 0.4 },
+                { label: 'Uso de RAM (%)', borderColor: '#bd93f9', backgroundColor: 'rgba(189, 147, 249, 0.1)', data: [], fill: true, tension: 0.4 }
+            ]
+        };
+
+        const padTime = (n) => n < 10 ? '0' + n : n;
 
         // Adiciona a animação de brilho (shimmer) aos botões ao clicar
         document.addEventListener('click', function(e) {
@@ -493,23 +565,27 @@ HTML_TEMPLATE = r"""
             const resDiv = document.getElementById('scan_results');
             const listDiv = document.getElementById('scan_list');
             
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> A procurar...';
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> A investigar...';
             btn.disabled = true;
             resDiv.style.display = 'block';
-            listDiv.innerHTML = '<span style="color: #6272a4; font-size: 0.85rem;">A rastrear a sub-rede via Multi-Threading (porta 22)... Aguarde.</span>';
+            listDiv.innerHTML = '<span style="color: #6272a4; font-size: 0.85rem;">A rastrear a sub-rede via Multi-Threading (porta 22) e a investigar Nomes e SO... Aguarde um pouco.</span>';
             
             fetch('/api/terminals/scan')
             .then(r => r.json())
             .then(data => {
                 listDiv.innerHTML = '';
                 if(data.ips && data.ips.length > 0) {
-                    data.ips.forEach(ip => {
+                    data.ips.forEach(item => {
                         const div = document.createElement('div');
                         div.style.display = 'flex'; div.style.justifyContent = 'space-between'; div.style.alignItems = 'center';
-                        div.style.background = '#282a36'; div.style.padding = '5px 10px'; div.style.borderRadius = '4px';
+                        div.style.background = '#282a36'; div.style.padding = '8px 10px'; div.style.borderRadius = '4px'; div.style.borderLeft = '3px solid #6272a4';
                         div.innerHTML = `
-                            <span style="color: #50fa7b; font-family: monospace;">${ip}</span>
-                            <button type="button" class="btn btn-info" style="padding: 0.2rem 0.5rem; font-size: 0.8rem; width: auto;" onclick="autofillForm('${ip}')">Usar IP</button>
+                            <div style="display: flex; flex-direction: column; gap: 3px;">
+                                <span style="color: #50fa7b; font-family: monospace; font-weight: bold; font-size: 1rem;">${item.ip}</span>
+                                <span style="color: #8be9fd; font-size: 0.75rem;"><i class="fas fa-tag"></i> ID: ${item.id}</span>
+                                <span style="color: #ff79c6; font-size: 0.75rem;"><i class="fas fa-microchip"></i> SO: ${item.os}</span>
+                            </div>
+                            <button type="button" class="btn btn-info" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; width: auto;" onclick="autofillForm('${item.ip}')">Usar IP</button>
                         `;
                         listDiv.appendChild(div);
                     });
@@ -706,6 +782,34 @@ HTML_TEMPLATE = r"""
             }).catch(err => logToConsole(`Falha de rede no broadcast: ${err.message}`, "error"));
         }
 
+        function uploadBootVideo() {
+            const ip = document.getElementById('cfg_current_ip').value;
+            const fileInput = document.getElementById('cfg_boot_video');
+            
+            if(!fileInput.files || fileInput.files.length === 0) {
+                alert("Por favor, selecione um ficheiro de vídeo (.mp4) primeiro."); return;
+            }
+            
+            const file = fileInput.files[0];
+            logToConsole(`[${ip}] A transferir vídeo de arranque (${file.name})... A rotação será aplicada automaticamente.`, 'sent');
+            
+            const formData = new FormData();
+            formData.append('ip', ip);
+            formData.append('video', file);
+            
+            fetch('/api/terminals/upload_boot_video', {
+                method: 'POST',
+                body: formData
+            }).then(r => r.json()).then(res => {
+                if(res.status === 'success') {
+                    logToConsole(`[${ip}] Vídeo instalado com sucesso! Verá o resultado no próximo reboot.`, 'response');
+                    fileInput.value = '';
+                } else {
+                    logToConsole(`[ERRO] Falha ao configurar vídeo: ${res.message}`, 'error');
+                }
+            }).catch(err => logToConsole(`Falha de rede na transferência: ${err.message}`, "error"));
+        }
+
         function scanWifiNetworks() {
             const ip = document.getElementById('cfg_current_ip').value;
             const resDiv = document.getElementById('wifi_scan_results');
@@ -802,6 +906,12 @@ HTML_TEMPLATE = r"""
             document.getElementById('cfg_hostname_input').value = 'A ler...';
             document.getElementById('cfg_ntp_input').value = 'A ler...';
             
+            document.getElementById('info_real_ip').innerText = 'A ler...';
+            document.getElementById('info_real_subnet').innerText = 'A ler...';
+            document.getElementById('info_real_gw').innerText = 'A ler...';
+            document.getElementById('info_real_dns').innerText = 'A ler...';
+            document.getElementById('info_real_wifi').innerText = 'A ler...';
+            
             const led = document.getElementById('url_led');
             const statusTxt = document.getElementById('url_status_text');
             led.className = 'led led-gray';
@@ -819,6 +929,12 @@ HTML_TEMPLATE = r"""
                     document.getElementById('cfg_url_input').value = data.real_url || '';
                     document.getElementById('cfg_hostname_input').value = data.real_hostname || '';
                     document.getElementById('cfg_ntp_input').value = data.real_ntp || '';
+                    
+                    document.getElementById('info_real_ip').innerText = data.real_ip || 'Desconhecido';
+                    document.getElementById('info_real_subnet').innerText = data.real_subnet || 'Desconhecido';
+                    document.getElementById('info_real_gw').innerText = data.real_gw || 'Desconhecido';
+                    document.getElementById('info_real_dns').innerText = data.real_dns || 'Desconhecido';
+                    document.getElementById('info_real_wifi').innerText = data.real_wifi || 'Desligado';
                     
                     // Gestão do LED do URL
                     const httpCode = parseInt(data.real_http);
@@ -862,6 +978,13 @@ HTML_TEMPLATE = r"""
                     document.getElementById('cfg_url_input').value = 'Falha ao ler terminal';
                     document.getElementById('cfg_hostname_input').value = 'Falha';
                     document.getElementById('cfg_ntp_input').value = 'Falha';
+                    
+                    document.getElementById('info_real_ip').innerText = 'Falha de Leitura';
+                    document.getElementById('info_real_subnet').innerText = 'Falha de Leitura';
+                    document.getElementById('info_real_gw').innerText = 'Falha de Leitura';
+                    document.getElementById('info_real_dns').innerText = 'Falha de Leitura';
+                    document.getElementById('info_real_wifi').innerText = 'Falha de Leitura';
+                    
                     led.className = 'led led-red';
                     statusTxt.innerText = '(Erro de Leitura)';
                 }
@@ -870,12 +993,50 @@ HTML_TEMPLATE = r"""
             });
         }
 
+        function closeHwModal() {
+            document.getElementById('hwModal').style.display = 'none';
+            if(hwPollInterval) {
+                clearInterval(hwPollInterval);
+                hwPollInterval = null;
+            }
+        }
+
         function openHwStatus(ip, name) {
             document.getElementById('hwModal').style.display = 'block';
             document.getElementById('hw_modal_title').innerText = name + ' (' + ip + ')';
             document.getElementById('hw_loading').style.display = 'block';
             document.getElementById('hw_data_grid').style.display = 'none';
+            document.getElementById('hw_charts_area').style.display = 'none';
 
+            // Reset do gráfico
+            if(hwPollInterval) clearInterval(hwPollInterval);
+            hwChartData.labels = [];
+            hwChartData.datasets[0].data = [];
+            hwChartData.datasets[1].data = [];
+            
+            if(hwChartInstance) { hwChartInstance.destroy(); hwChartInstance = null; }
+            
+            const ctx = document.getElementById('hwChart').getContext('2d');
+            Chart.defaults.color = '#6272a4';
+            hwChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: hwChartData,
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    animation: { duration: 0 },
+                    scales: {
+                        y: { min: 0, max: 100, ticks: { color: '#8be9fd' }, grid: { color: '#44475a' } },
+                        x: { ticks: { color: '#8be9fd' }, grid: { color: '#44475a' } }
+                    },
+                    plugins: { legend: { labels: { color: '#f8f8f2' } } }
+                }
+            });
+
+            fetchHwData(ip);
+            hwPollInterval = setInterval(() => fetchHwData(ip), HW_POLL_RATE);
+        }
+
+        function fetchHwData(ip) {
             fetch('/api/terminals/hw_status', {
                 method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ip: ip})
             }).then(r => r.json()).then(data => {
@@ -886,7 +1047,6 @@ HTML_TEMPLATE = r"""
                     document.getElementById('hw_disk').innerText = data.hw.disk;
                     document.getElementById('hw_uptime').innerText = data.hw.uptime;
                     
-                    // Alertas de cor para temperatura
                     const tempStr = data.hw.temp;
                     const tempVal = parseFloat(tempStr.replace(/[^0-9.]/g, ''));
                     if(!isNaN(tempVal)) {
@@ -897,13 +1057,46 @@ HTML_TEMPLATE = r"""
                         document.getElementById('hw_temp').style.color = '#f8f8f2';
                     }
 
+                    // Atualizar Gráfico
+                    const now = new Date();
+                    const timeLabel = padTime(now.getHours()) + ':' + padTime(now.getMinutes()) + ':' + padTime(now.getSeconds());
+                    if(hwChartData.labels.length > 20) {
+                        hwChartData.labels.shift();
+                        hwChartData.datasets[0].data.shift();
+                        hwChartData.datasets[1].data.shift();
+                    }
+                    hwChartData.labels.push(timeLabel);
+                    hwChartData.datasets[0].data.push(data.hw.num_cpu);
+                    hwChartData.datasets[1].data.push(data.hw.num_ram);
+                    if(hwChartInstance) hwChartInstance.update();
+
+                    // Atualizar Tabela Top 10
+                    const tbody = document.getElementById('hw_processes_tbody');
+                    tbody.innerHTML = '';
+                    data.hw.procs.forEach(p => {
+                        tbody.innerHTML += `
+                            <tr style="border-bottom: 1px solid #44475a; transition: background 0.2s;" onmouseover="this.style.background='#44475a'" onmouseout="this.style.background='transparent'">
+                                <td style="padding: 8px;">${p.pid}</td>
+                                <td style="padding: 8px;">${p.user}</td>
+                                <td style="padding: 8px; color: #ff5555; font-weight: bold;">${p.cpu}%</td>
+                                <td style="padding: 8px; color: #bd93f9; font-weight: bold;">${p.mem}%</td>
+                                <td style="padding: 8px; word-break: break-all;">${p.comm}</td>
+                            </tr>
+                        `;
+                    });
+
                     document.getElementById('hw_loading').style.display = 'none';
                     document.getElementById('hw_data_grid').style.display = 'grid';
+                    document.getElementById('hw_charts_area').style.display = 'block';
                 } else {
+                    if(hwPollInterval) { clearInterval(hwPollInterval); hwPollInterval = null; }
                     document.getElementById('hw_loading').innerHTML = '<span style="color:#ff5555;"><i class="fas fa-times-circle"></i> Erro: ' + data.message + '</span>';
+                    document.getElementById('hw_loading').style.display = 'block';
                 }
             }).catch(err => {
+                if(hwPollInterval) { clearInterval(hwPollInterval); hwPollInterval = null; }
                 document.getElementById('hw_loading').innerHTML = '<span style="color:#ff5555;"><i class="fas fa-wifi"></i> Falha de rede: ' + err.message + '</span>';
+                document.getElementById('hw_loading').style.display = 'block';
             });
         }
 
@@ -935,9 +1128,10 @@ HTML_TEMPLATE = r"""
             
             if(type === 'net' && value === 'static') {
                 payload.static_ip = document.getElementById('cfg_static_ip').value;
+                payload.static_subnet = document.getElementById('cfg_static_subnet').value;
                 payload.static_gw = document.getElementById('cfg_static_gw').value;
                 payload.static_dns = document.getElementById('cfg_static_dns').value;
-                if(!payload.static_ip) { alert("Preencha o IP para avançar!"); return; }
+                if(!payload.static_ip || !payload.static_subnet) { alert("Preencha o IP e a Subnet para avançar!"); return; }
                 if(!confirm("Atenção: Ao enviar um IP fixo a máquina perderá a ligação atual e assumirá o novo IP imediatamente. Prosseguir?")) return;
             }
             if(type === 'net' && value === 'wifi') {
@@ -960,6 +1154,9 @@ HTML_TEMPLATE = r"""
                 if(value === 'on' && !confirm("Vai bloquear o cartão SD para leitura. O Raspberry Pi vai reiniciar de imediato. Deseja prosseguir?")) return;
                 if(value === 'off' && !confirm("Vai desbloquear o cartão SD para permitir escritas (ex: atualizações). O Raspberry Pi vai reiniciar de imediato. Deseja prosseguir?")) return;
             }
+            if(type === 'remove_bootvideo') {
+                if(!confirm("Tem a certeza que deseja remover o vídeo de arranque atual e restaurar o comportamento padrão?")) return;
+            }
 
             if(type === 'net' && value === 'static') {
                 logToConsole(`[${ip}] A verificar disponibilidade do novo IP, Gateway e DNS...`, 'sent');
@@ -981,6 +1178,7 @@ HTML_TEMPLATE = r"""
                     if(type === 'url') logToConsole(`Atenção: A mudança de URL causa o reinicio do gestor gráfico (LightDM). O ecrã vai piscar.`, 'info');
                     if(type === 'ntp') logToConsole(`Servidor NTP atualizado. O relógio irá ajustar-se gradualmente.`, 'info');
                     if(type === 'readonly') logToConsole(`Atenção: O terminal vai perder a ligação enquanto reinicia para aplicar o bloqueio/desbloqueio do SD.`, 'info');
+                    if(type === 'remove_bootvideo') logToConsole(`Vídeo removido com sucesso. O ecrã voltará ao estado original no próximo reboot.`, 'info');
                     
                     // Se foi uma configuração não destrutiva, recarrega o cartão para testar o novo LED ou Status
                     if(['url', 'net', 'hostname', 'ntp'].includes(type)) {
@@ -1098,13 +1296,119 @@ def api_scan_network():
     base_ip = local_ip.rsplit('.', 1)[0]
     found_ips = []
     
+    terminals_db = load_terminals()
+    
     def check_port(ip):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
         try:
-            if sock.connect_ex((ip, 22)) == 0: return ip
-        except Exception: pass
-        finally: sock.close()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            if sock.connect_ex((ip, 22)) == 0:
+                sock.close()
+                
+                os_info = "Desconhecido"
+                hostname_id = "Desconhecido"
+                
+                # 1. Se já existir na Base de Dados, utiliza a password guardada para ler os dados reais
+                if ip in terminals_db and PARAMIKO_AVAILABLE:
+                    try:
+                        client = paramiko.SSHClient()
+                        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                        client.connect(
+                            hostname=ip, port=22, 
+                            username=terminals_db[ip].get('username', 'pi'), 
+                            password=decode_pwd(terminals_db[ip].get('password', '')), 
+                            timeout=1.5
+                        )
+                        stdin, stdout, stderr = client.exec_command('hostname && cat /etc/os-release', timeout=1.5)
+                        out = stdout.read().decode('utf-8', errors='ignore').split('\n')
+                        if len(out) > 0 and out[0].strip(): hostname_id = out[0].strip()
+                        for line in out:
+                            if line.startswith('PRETTY_NAME='):
+                                os_info = line.split('=')[1].replace('"', '').strip()
+                                break
+                        
+                        # Verifica se o diretório do FullPageOS existe para ser absoluto
+                        stdin, stdout, stderr = client.exec_command('ls /boot/fullpageos.txt /boot/firmware/fullpageos.txt 2>/dev/null', timeout=1.5)
+                        if "fullpageos.txt" in stdout.read().decode('utf-8'):
+                            os_info = "FullPageOS"
+                            
+                        client.close()
+                        return {"ip": ip, "os": os_info, "id": hostname_id}
+                    except Exception:
+                        pass
+
+                # 2. Resolução Passiva (para equipamentos novos ou onde a password falhou)
+                try:
+                    name = socket.gethostbyaddr(ip)[0]
+                    if name and name != ip: hostname_id = name.split('.')[0]
+                except: pass
+
+                if hostname_id == "Desconhecido":
+                    try:
+                        res = subprocess.check_output(['avahi-resolve', '-a', ip], timeout=1.0, stderr=subprocess.DEVNULL).decode('utf-8')
+                        if res: hostname_id = res.split()[1].split('.')[0]
+                    except: pass
+
+                if hostname_id == "Desconhecido":
+                    try:
+                        res = subprocess.check_output(['nmblookup', '-A', ip], timeout=1.0, stderr=subprocess.DEVNULL).decode('utf-8')
+                        for line in res.split('\n'):
+                            if '<00>' in line and 'GROUP' not in line:
+                                hostname_id = line.split('<00>')[0].strip()
+                                break
+                    except: pass
+
+                # Tentar ler a porta HTTP para ver se "grita" FullPageOS
+                try:
+                    import urllib.request
+                    req = urllib.request.urlopen(f"http://{ip}/", timeout=1.0)
+                    html = req.read().decode('utf-8', errors='ignore').lower()
+                    if 'fullpageos' in html: os_info = "FullPageOS"
+                except: pass
+
+                if os_info == "Desconhecido":
+                    try:
+                        sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock2.settimeout(1.0)
+                        sock2.connect((ip, 22))
+                        banner = sock2.recv(1024).decode('utf-8', errors='ignore').strip()
+                        sock2.close()
+                        if 'Raspbian' in banner: os_info = "Raspbian OS"
+                        elif 'Debian' in banner: os_info = "Debian / Possível FullPageOS"
+                        elif 'Ubuntu' in banner: os_info = "Ubuntu"
+                        elif banner.startswith('SSH-'): os_info = banner.split()[0].replace('SSH-2.0-', '')
+                        else: os_info = "SSH Ativo"
+                    except:
+                        os_info = "SSH Ativo"
+
+                # 3. Tentativa de Invasão Leve: Se for um Raspberry novo, a password estará em default
+                if PARAMIKO_AVAILABLE and (hostname_id == "Desconhecido" or "Possível" in os_info or os_info == "SSH Ativo"):
+                    for default_pass in ['raspberry', 'fullpageos', 'pi']:
+                        try:
+                            client = paramiko.SSHClient()
+                            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                            client.connect(hostname=ip, port=22, username='pi', password=default_pass, timeout=1.5)
+                            stdin, stdout, stderr = client.exec_command('hostname && cat /etc/os-release', timeout=1.5)
+                            out = stdout.read().decode('utf-8', errors='ignore').split('\n')
+                            if len(out) > 0 and out[0].strip(): hostname_id = out[0].strip()
+                            for line in out:
+                                if line.startswith('PRETTY_NAME='):
+                                    os_info = line.split('=')[1].replace('"', '').strip()
+                                    break
+                            
+                            stdin, stdout, stderr = client.exec_command('ls /boot/fullpageos.txt /boot/firmware/fullpageos.txt 2>/dev/null', timeout=1.5)
+                            if "fullpageos.txt" in stdout.read().decode('utf-8'):
+                                os_info = "FullPageOS"
+                                
+                            client.close()
+                            break
+                        except Exception:
+                            pass
+
+                return {"ip": ip, "os": os_info, "id": hostname_id}
+            sock.close()
+        except Exception:
+            pass
         return None
 
     ips_to_check = [f"{base_ip}.{i}" for i in range(1, 255)]
@@ -1113,7 +1417,7 @@ def api_scan_network():
         results = list(executor.map(check_port, ips_to_check))
         
     for res in results:
-        if res and res != local_ip: found_ips.append(res)
+        if res and res["ip"] != local_ip: found_ips.append(res)
             
     return jsonify({"status": "success", "ips": found_ips})
 
@@ -1219,11 +1523,75 @@ def api_broadcast():
             
     return jsonify({"status": "success"})
 
+@app.route('/api/terminals/upload_boot_video', methods=['POST'])
+def api_upload_boot_video():
+    """ Envia um vídeo MP4 por SFTP e instala o serviço MPV respeitando a rotação do ecrã """
+    if not PARAMIKO_AVAILABLE: return jsonify({"status": "error", "message": "Biblioteca Paramiko em falta."})
+    
+    ip = request.form.get('ip', '')
+    if 'video' not in request.files: return jsonify({"status": "error", "message": "Nenhum ficheiro recebido."})
+    file = request.files['video']
+    
+    terminals = load_terminals()
+    if ip not in terminals: return jsonify({"status": "error", "message": "Terminal não registado."})
+        
+    username = terminals[ip].get('username')
+    password = decode_pwd(terminals[ip].get('password', ''))
+    
+    rotation = terminals[ip].get('config_state', {}).get('rotation', '0')
+    mpv_rot = rotation 
+
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(hostname=ip, port=22, username=username, password=password, timeout=10.0)
+        
+        sftp = client.open_sftp()
+        sftp.putfo(file.stream, '/tmp/boot_video.mp4')
+        sftp.close()
+        
+        setup_script = f"""
+        sudo mv /tmp/boot_video.mp4 /opt/boot_video.mp4
+        sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mpv
+        sudo bash -c 'cat << EOF > /etc/systemd/system/bootvideo.service
+[Unit]
+Description=Play Boot Video with Orientation
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=lightdm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mpv --vo=drm --video-rotate={mpv_rot} --really-quiet /opt/boot_video.mp4
+StandardInput=tty
+StandardOutput=tty
+
+[Install]
+WantedBy=sysinit.target
+EOF'
+        sudo chmod 644 /etc/systemd/system/bootvideo.service
+        sudo systemctl daemon-reload
+        sudo systemctl enable bootvideo.service
+        """
+        
+        stdin, stdout, stderr = client.exec_command(setup_script, timeout=120.0)
+        exit_status = stdout.channel.recv_exit_status()
+        client.close()
+        
+        if exit_status == 0:
+            return jsonify({"status": "success"})
+        else:
+            err_msg = stderr.read().decode('utf-8')
+            return jsonify({"status": "error", "message": f"Erro de instalação: {err_msg}"})
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
 @app.route('/api/terminals/get_real_state', methods=['POST'])
 def api_get_real_state():
     """
     Entra no terminal, extrai ativamente o URL, e obriga o Raspberry a testar a acessibilidade do próprio URL!
-    Lê também o estado atual do OverlayFS (Read-Only mode).
+    Lê também o estado atual do OverlayFS (Read-Only mode) e informações completas de IP/Subnet/Gateway/DNS/WiFi.
     """
     if not PARAMIKO_AVAILABLE: return jsonify({"status": "error", "message": "Biblioteca Paramiko não instalada."})
         
@@ -1240,7 +1608,7 @@ def api_get_real_state():
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(hostname=ip, port=22, username=username, password=password, timeout=5.0)
         
-        # Procura linhas http robustamente, test HTTP, NTP, HN e OverlayFS
+        # Script Bash embutido para recolher as métricas solicitadas
         read_script = """
 URL=$(grep -m 1 "^http" /boot/firmware/fullpageos.txt 2>/dev/null || grep -m 1 "^http" /boot/fullpageos.txt 2>/dev/null)
 URL=$(echo "$URL" | tr -d '\r' | xargs)
@@ -1252,11 +1620,29 @@ NTP=$(grep -m 1 "^NTP=" /etc/systemd/timesyncd.conf 2>/dev/null | cut -d= -f2 ||
 HN=$(hostname || echo "")
 if grep -q -E "^overlay" /proc/mounts; then RO="ON"; else RO="OFF"; fi
 
+IP_FULL=$(ip -o -f inet addr show | awk '/scope global/ {print $4}' | head -n 1 || echo "N/A")
+if [[ "$IP_FULL" == *"/"* ]]; then
+    IP_RES=$(echo "$IP_FULL" | cut -d/ -f1)
+    CIDR_RES=$(echo "$IP_FULL" | cut -d/ -f2)
+else
+    IP_RES=$(hostname -I | awk '{print $1}' || echo "N/A")
+    CIDR_RES="24"
+fi
+
+GW_RES=$(ip route | grep default | awk '{print $3}' | head -n 1 || echo "N/A")
+DNS_RES=$(grep nameserver /etc/resolv.conf | head -n 1 | awk '{print $2}' || echo "N/A")
+WIFI_RES=$(iwgetid -r 2>/dev/null || echo "Desligado")
+
 echo "URL_RES||$URL"
 echo "HTTP_RES||$HTTP_CODE"
 echo "NTP_RES||$NTP"
 echo "HN_RES||$HN"
 echo "RO_RES||$RO"
+echo "IP_RES||$IP_RES"
+echo "CIDR_RES||$CIDR_RES"
+echo "GW_RES||$GW_RES"
+echo "DNS_RES||$DNS_RES"
+echo "WIFI_RES||$WIFI_RES"
 """
         
         stdin, stdout, stderr = client.exec_command(read_script, timeout=7.0)
@@ -1268,6 +1654,11 @@ echo "RO_RES||$RO"
         real_ntp = ""
         real_hn = ""
         real_ro = "OFF"
+        real_ip = ""
+        real_subnet = "255.255.255.0"
+        real_gw = ""
+        real_dns = ""
+        real_wifi = ""
         
         for line in output.split('\n'):
             if line.startswith("URL_RES||"): real_url = line.split("||")[1].strip()
@@ -1275,6 +1666,18 @@ echo "RO_RES||$RO"
             if line.startswith("NTP_RES||"): real_ntp = line.split("||")[1].strip()
             if line.startswith("HN_RES||"): real_hn = line.split("||")[1].strip()
             if line.startswith("RO_RES||"): real_ro = line.split("||")[1].strip()
+            if line.startswith("IP_RES||"): real_ip = line.split("||")[1].strip()
+            if line.startswith("CIDR_RES||"): 
+                cidr_str = line.split("||")[1].strip()
+                try:
+                    cidr = int(cidr_str)
+                    mask = (0xffffffff >> (32 - cidr)) << (32 - cidr)
+                    real_subnet = f"{(mask >> 24) & 0xff}.{(mask >> 16) & 0xff}.{(mask >> 8) & 0xff}.{mask & 0xff}"
+                except:
+                    real_subnet = "255.255.255.0"
+            if line.startswith("GW_RES||"): real_gw = line.split("||")[1].strip()
+            if line.startswith("DNS_RES||"): real_dns = line.split("||")[1].strip()
+            if line.startswith("WIFI_RES||"): real_wifi = line.split("||")[1].strip()
             
         saved_config = terminals[ip].get('config_state', {})
         
@@ -1285,6 +1688,11 @@ echo "RO_RES||$RO"
             "real_ntp": real_ntp,
             "real_hostname": real_hn,
             "real_ro": real_ro,
+            "real_ip": real_ip,
+            "real_subnet": real_subnet,
+            "real_gw": real_gw,
+            "real_dns": real_dns,
+            "real_wifi": real_wifi,
             "config": saved_config
         })
         
@@ -1313,18 +1721,52 @@ def api_hw_status():
         echo "RAM||$(free -m | awk 'NR==2{printf \"%s MB / %s MB\", $3,$2 }' || echo 'N/A')"
         echo "DISK||$(df -h / | awk 'NR==2{printf \"%s / %s (%s livre)\", $3,$2,$4 }' || echo 'N/A')"
         echo "CPU||$(cat /proc/loadavg | awk '{print $1, $2, $3}' || echo 'N/A')"
+        echo "NUM_RAM||$(free | awk '/Mem/{printf \"%.1f\", $3/$2 * 100.0}' || echo '0')"
+        echo "NUM_CPU||$(top -bn1 | awk '/Cpu\(s\):/ {print $2 + $4}' | head -n 1 || echo '0')"
+        echo "PROCS_START"
+        ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu | head -n 11 | tail -n 10
+        echo "PROCS_END"
         """
-        stdin, stdout, stderr = client.exec_command(hw_script, timeout=5.0)
+        stdin, stdout, stderr = client.exec_command(hw_script, timeout=8.0)
         output = stdout.read().decode('utf-8').strip()
         client.close()
 
-        res = {"temp": "N/A", "uptime": "N/A", "ram": "N/A", "disk": "N/A", "cpu": "N/A"}
+        res = {"temp": "N/A", "uptime": "N/A", "ram": "N/A", "disk": "N/A", "cpu": "N/A", "num_ram": 0, "num_cpu": 0, "procs": []}
+        in_procs = False
+        
         for line in output.split('\n'):
-            if line.startswith("TEMP||"): res["temp"] = line.split("||")[1]
-            elif line.startswith("UPTIME||"): res["uptime"] = line.split("||")[1]
-            elif line.startswith("RAM||"): res["ram"] = line.split("||")[1]
-            elif line.startswith("DISK||"): res["disk"] = line.split("||")[1]
-            elif line.startswith("CPU||"): res["cpu"] = line.split("||")[1]
+            line = line.strip()
+            if not line: continue
+            
+            if line == "PROCS_START":
+                in_procs = True
+                continue
+            if line == "PROCS_END":
+                in_procs = False
+                continue
+                
+            if in_procs:
+                parts = line.split(None, 4)
+                if len(parts) == 5:
+                    res["procs"].append({
+                        "pid": parts[0],
+                        "user": parts[1],
+                        "cpu": parts[2],
+                        "mem": parts[3],
+                        "comm": parts[4]
+                    })
+            else:
+                if line.startswith("TEMP||"): res["temp"] = line.split("||")[1]
+                elif line.startswith("UPTIME||"): res["uptime"] = line.split("||")[1]
+                elif line.startswith("RAM||"): res["ram"] = line.split("||")[1]
+                elif line.startswith("DISK||"): res["disk"] = line.split("||")[1]
+                elif line.startswith("CPU||"): res["cpu"] = line.split("||")[1]
+                elif line.startswith("NUM_RAM||"): 
+                    try: res["num_ram"] = float(line.split("||")[1].replace(',','.'))
+                    except: pass
+                elif line.startswith("NUM_CPU||"): 
+                    try: res["num_cpu"] = float(line.split("||")[1].replace(',','.'))
+                    except: pass
 
         return jsonify({"status": "success", "hw": res})
 
@@ -1397,7 +1839,14 @@ def api_apply_config():
     if cfg_type == 'rot':
         rot_map = {'0': 'normal', '90': 'left', '180': 'inverted', '270': 'right'}
         x11_rot = rot_map.get(cfg_value, 'normal')
-        command = f"DISPLAY=:0 xrandr --output default --rotate {x11_rot} || DISPLAY=:0 xrandr -o {x11_rot}"
+        # Atualizar tanto o X11 quanto o serviço de Boot (se ele existir)
+        command = f"""
+        DISPLAY=:0 xrandr --output default --rotate {x11_rot} || DISPLAY=:0 xrandr -o {x11_rot}
+        if [ -f /etc/systemd/system/bootvideo.service ]; then
+            sudo sed -i 's/--video-rotate=[0-9]*/--video-rotate={cfg_value}/g' /etc/systemd/system/bootvideo.service
+            sudo systemctl daemon-reload
+        fi
+        """
         
     elif cfg_type == 'screensaver':
         command = "DISPLAY=:0 xset s noblank && DISPLAY=:0 xset s off && DISPLAY=:0 xset -dpms"
@@ -1406,22 +1855,18 @@ def api_apply_config():
         if cfg_value == 'dhcp':
             command = "sudo nmcli con mod 'Wired connection 1' ipv4.method auto && sudo nmcli con up 'Wired connection 1'"
         elif cfg_value == 'static':
-            sip = req_data.get('static_ip', '')
-            sgw = req_data.get('static_gw', '')
-            sdns = req_data.get('static_dns', '')
+            sip = req_data.get('static_ip', '').strip()
+            ssubnet = req_data.get('static_subnet', '').strip()
+            sgw = req_data.get('static_gw', '').strip()
+            sdns = req_data.get('static_dns', '').strip()
             
-            clean_ip = sip.split('/')[0] if '/' in sip else sip
-            if clean_ip != ip:
-                if is_reachable(clean_ip):
-                    return jsonify({"status": "error", "message": f"Atenção: O IP {clean_ip} já está a responder na rede."})
-            
-            if not is_reachable(sgw):
-                return jsonify({"status": "error", "message": f"A Gateway {sgw} encontra-se inacessível."})
+            if '.' in ssubnet:
+                try: cidr = sum(bin(int(x)).count('1') for x in ssubnet.split('.'))
+                except: cidr = 24
+            else: cidr = 24
                 
-            if not is_reachable(sdns) and sdns != sgw:
-                return jsonify({"status": "error", "message": f"O DNS {sdns} falhou no teste de Ping."})
-            
-            command = f"sudo nmcli con mod 'Wired connection 1' ipv4.addresses {sip} ipv4.gateway {sgw} ipv4.dns {sdns} ipv4.method manual && sudo nmcli con up 'Wired connection 1'"
+            sip_full = f"{sip}/{cidr}"
+            command = f"sudo nmcli con mod 'Wired connection 1' ipv4.addresses {sip_full} ipv4.gateway {sgw} ipv4.dns {sdns} ipv4.method manual && sudo nmcli con up 'Wired connection 1'"
             
         elif cfg_value == 'wifi':
             ssid = req_data.get('wifi_ssid', '').replace("'", "'\\''")
@@ -1487,6 +1932,9 @@ fi
             command = "sudo raspi-config nonint enable_overlayfs && sudo raspi-config nonint enable_bootro && sudo reboot"
         elif cfg_value == 'off':
             command = "sudo raspi-config nonint disable_overlayfs && sudo raspi-config nonint disable_bootro && sudo reboot"
+            
+    elif cfg_type == 'remove_bootvideo':
+        command = "sudo systemctl disable bootvideo.service; sudo rm -f /etc/systemd/system/bootvideo.service /opt/boot_video.mp4; sudo systemctl daemon-reload"
 
     if not command: return jsonify({"status": "error", "message": "Ação desconhecida."})
 
@@ -1494,15 +1942,10 @@ fi
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(hostname=ip, port=22, username=username, password=password, timeout=5.0)
-        
-        if cfg_type == 'net' and cfg_value in ['static', 'wifi']:
-            client.exec_command(command, timeout=1.0)
-        else:
-            client.exec_command(command, timeout=8.0)
-            
+        client.exec_command(command, timeout=8.0)
         client.close()
         
-        if cfg_type not in ['action', 'url', 'time', 'hostname', 'readonly']:
+        if cfg_type not in ['action', 'url', 'time', 'hostname', 'readonly', 'remove_bootvideo']:
             if 'config_state' not in terminals[ip]: terminals[ip]['config_state'] = {}
             if cfg_type == 'rot': terminals[ip]['config_state']['rotation'] = cfg_value
             elif cfg_type == 'screensaver': terminals[ip]['config_state']['screensaver'] = cfg_value
@@ -1512,7 +1955,6 @@ fi
             save_terminals(terminals)
         
         return jsonify({"status": "success"})
-        
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
@@ -1537,24 +1979,14 @@ def api_screenshot():
         exit_status = stdout.channel.recv_exit_status()
         
         if exit_status != 0:
-            error_msg = stderr.read().decode('utf-8').strip()
             client.close()
-            if "command not found" in error_msg or "not found" in error_msg:
-                return jsonify({"status": "error", "message": "Falta o utilitário 'scrot' no Raspberry. Use a consola em baixo e envie o comando: sudo apt-get install -y scrot"})
-            return jsonify({"status": "error", "message": f"O ecrã bloqueou a captura: {error_msg}"})
+            return jsonify({"status": "error", "message": "Falta o utilitário 'scrot' no Raspberry."})
         
         sftp = client.open_sftp()
-        try:
-            with sftp.file('/tmp/screen.png', 'rb') as f:
-                img_data = f.read()
-        except IOError:
-            sftp.close()
-            client.close()
-            return jsonify({"status": "error", "message": "A foto não foi guardada. O ecrã pode estar em standby ou a máquina não suporta X11."})
-            
+        with sftp.file('/tmp/screen.png', 'rb') as f:
+            img_data = f.read()
         b64_img = base64.b64encode(img_data).decode('utf-8')
-        try: sftp.remove('/tmp/screen.png')
-        except: pass
+        sftp.remove('/tmp/screen.png')
         sftp.close()
         client.close()
         return jsonify({"status": "success", "image": b64_img})
@@ -1595,8 +2027,6 @@ if __name__ == '__main__':
 
     logging.info("=========================================================")
     logging.info("🤖 SISTEMA DE GESTÃO DE TERMINAIS SSH INICIADO")
-    if not PARAMIKO_AVAILABLE:
-        logging.info("⚠️  AVISO: 'paramiko' está em falta. Funcionalidade SSH desativada.")
     logging.info(f"🌐 Aceda pelo seu navegador: http://{local_ip}:5583")
     logging.info("=========================================================")
     
