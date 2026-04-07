@@ -4,12 +4,10 @@ Sistema Completo de Gestão de Imagens e Backup
 Versão Final com Sistema de Turnos, LEDs de Status, Portal Público Separado, 
 Gestão de Users e Sistema Dinâmico de Modos (Teste vs Produção) On-The-Fly.
 
-ATUALIZAÇÃO: Otimização extrema para NAS (Synology DS423).
-Uso de os.scandir nativo, pré-compilação Regex e limitação de I/O Thrashing.
-Adição do serviço de Backup PKIRIS, Históricos e Artigos com árvore automática e retentividade.
-Correção das rotas API do Mosaico e tags Cross-Origin.
-Adicionado arranque automático do portal de Criação Pen PKIRIS.
-Sistema de Logs com Múltiplos Separadores Dinâmicos e Correção de Indentação.
+ATUALIZAÇÃO: 
+- Pesquisa recursiva de artigos ativada em todas as subdiretorias.
+- Contagem exaustiva de Imagens e XMLs separada por Data, Turno e Linha.
+- Output log cronológico com resumo de totais adicionado ao painel.
 """
 
 import os
@@ -83,6 +81,7 @@ mosaic_processes = {}
 mosaic_lock = threading.RLock()
 public_portal_process = None
 pen_pkiris_process = None
+ssh_terminals_process = None
 active_folders = {}
 last_day_reset = datetime.now().day
 files_copied_shift = {}
@@ -388,2286 +387,8 @@ LOGIN_TEMPLATE = r"""
         <div style="margin-top:10px;">
             <a href="http://{{ request.host.split(':')[0] }}:5582" style="color: #8e44ad; text-decoration: none; font-weight: bold;">&#8594; {{ t('Portal Criação Pen PKIRIS') }}</a>
         </div>
-        {% if error %}<p class="error-message">{{ t(error) }}</p>{% endif %}
-    </div>
-
-    <script>
-    function changeLang(lang) {
-        fetch('/set_lang', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lang: lang })
-        }).then(() => window.location.reload());
-    }
-    </script>
-</body>
-</html>
-"""
-
-BACKUP_TEMPLATE = r"""
-<!DOCTYPE html>
-<html lang="{{ lang }}">
-<head>
-<meta charset="UTF-8">
-<title>{{ t('Sistema de Gestão de Imagens - Backup Avançado') }}</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
-<style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; color: #333; }
-    .header { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; }
-    .header-title { text-align: center; flex-grow: 1; }
-    .header h1 { color: #2c3e50; font-size: 2rem; margin-bottom: 0.5rem; }
-    .header p { color: #7f8c8d; font-size: 1rem; }
-    .user-info { text-align: right; }
-    .user-info span { display: block; font-weight: bold; color: #2c3e50; }
-    .container { max-width: 1600px; margin: 0 auto; padding: 2rem; }
-    .tabs { display: flex; background: rgba(255,255,255,0.9); border-radius: 12px 12px 0 0; margin-bottom: 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); flex-wrap: wrap; }
-    .tab { flex: 1; padding: 1rem 2rem; background: transparent; border: none; cursor: pointer; font-size: 1rem; font-weight: 600; color: #7f8c8d; transition: all 0.3s ease; border-bottom: 3px solid transparent; white-space: nowrap; }
-    .tab:hover { background: rgba(103, 126, 234, 0.1); color: #667eea; }
-    .tab.active { color: #667eea; border-bottom-color: #667eea; background: rgba(103, 126, 234, 0.1); }
-    .tab-content { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-radius: 0 0 12px 12px; padding: 2rem; box-shadow: 0 4px 20px rgba(0,0,0,0.1); display: none; }
-    .tab-content.active { display: block; }
-    .section { background: white; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 2px 15px rgba(0,0,0,0.1); border-left: 4px solid #667eea; }
-    .section h3 { color: #2c3e50; margin-bottom: 1rem; font-size: 1.3rem; display: flex; align-items: center; gap: 0.5rem; }
-    .section h4 { color: #2c3e50; margin-top: 1.5rem; margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 2px solid #eee; font-size: 1.1rem; }
-    .linha-card { background: white; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 2px 15px rgba(0,0,0,0.1); border-left: 4px solid #e74c3c; }
-    .linha-card h4 { color: #e74c3c; margin-bottom: 1rem; font-size: 1.2rem; text-align: center; background: rgba(231, 76, 60, 0.1); padding: 0.5rem; border-radius: 8px; }
-    .machine-section, .ramal { background: #f8f9fa; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; border: 1px solid #dee2e6; }
-    .machine-section h5, .ramal h5 { color: #495057; margin-bottom: 0.75rem; font-size: 1rem; border-bottom: 2px solid #dee2e6; padding-bottom: 0.5rem; }
-    .machine-section h6, .ramal h6 { color: #6c757d; margin-bottom: 0.5rem; font-size: 0.9rem; }
-    .form-group { margin-bottom: 1rem; }
-    .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #495057; }
-    .form-control { width: 100%; padding: 0.75rem; border: 1px solid #ced4da; border-radius: 6px; font-size: 0.9rem; transition: border-color 0.3s ease; }
-    .form-control:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(103, 126, 234, 0.1); }
-    .path-input-group { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
-    .path-input-group label { min-width: 120px; margin-bottom: 0; font-size: 0.9rem; }
-    .path-input-group input { flex: 1; padding: 0.5rem; border: 1px solid #ced4da; border-radius: 4px; }
-    .time-input-group { display: grid; grid-template-columns: 120px 1fr 1fr 1fr; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
-    .time-input-group label { font-size: 0.9rem; font-weight: 600; }
-    .time-input-group input { padding: 0.5rem; border: 1px solid #ced4da; border-radius: 4px; }
-    .browse-btn { padding: 0.5rem 1rem; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; gap: 0.25rem; }
-    .browse-btn:hover { background: #138496; }
-    .status-led { width: 16px; height: 16px; border-radius: 50%; background: #dc3545; display: inline-block; margin-left: 0.5rem; position: relative; transition: all 0.3s ease; }
-    .status-led.online { background: #28a745; box-shadow: 0 0 8px rgba(40, 167, 69, 0.5); }
-    .status-led.checking { background: #ffc107; animation: pulse 1.5s infinite; }
-    .service-led { width: 12px; height: 12px; border-radius: 50%; background: #dc3545; display: inline-block; margin-left: 0.5rem; position: relative; transition: all 0.3s ease; }
-    .service-led.active { background: #28a745; box-shadow: 0 0 6px rgba(40, 167, 69, 0.8); }
-    .service-led.inactive { background: #dc3545; }
-    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-    .btn { padding: 0.75rem 1.5rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem; transition: all 0.3s ease; font-size: 0.9rem; margin: 0.25rem; }
-    .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
-    .btn-primary { background: #667eea; color: white; }
-    .btn-success { background: #28a745; color: white; }
-    .btn-warning { background: #ffc107; color: #212529; }
-    .btn-danger { background: #dc3545; color: white; }
-    .btn-info { background: #17a2b8; color: white; }
-    .btn-sm { padding: 0.5rem 1rem; font-size: 0.8rem; }
-    .status-indicator { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
-    .status-running { background: #d4edda; color: #155724; }
-    .status-stopped { background: #f8d7da; color: #721c24; }
-    .status-configured { background: #d1ecf1; color: #0c5460; }
-    .machine-buttons { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; align-items: center; }
-    .ramal-container { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
-    .stats-card { background: white; padding: 1.5rem; border-radius: 12px; text-align: center; box-shadow: 0 2px 15px rgba(0,0,0,0.1); border-left: 4px solid #28a745; }
-    .stats-value { font-size: 2rem; font-weight: bold; color: #28a745; display: block; }
-    .stats-label { color: #6c757d; font-size: 0.9rem; margin-top: 0.5rem; }
-    
-    .progress-container { width: 100%; margin-top: 15px; }
-    /* Estilos atualizados para as abas dos logs */
-    .log-tabs { display: flex; overflow-x: auto; background: #2c3e50; border-radius: 6px 6px 0 0; padding: 5px 5px 0 5px; margin-top: 10px; }
-    .log-tab { padding: 8px 15px; background: #34495e; color: #bdc3c7; border: none; cursor: pointer; border-radius: 4px 4px 0 0; margin-right: 5px; font-size: 0.85rem; font-family: monospace; transition: all 0.2s; white-space: nowrap; }
-    .log-tab:hover { background: #3fc380; color: white; }
-    .log-tab.active { background: #1e1e1e; color: #2ecc71; border-top: 2px solid #2ecc71; font-weight: bold; }
-    .log-content-area { background: #1e1e1e; color: #fff; padding: 1rem; border-radius: 0 0 6px 6px; font-family: monospace; height: 500px; overflow-y: auto; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
-    .log-content-area p { margin: 2px 0; }
-    
-    .log-window { background: #1e1e1e; color: #2ecc71; font-family: monospace; font-size: 0.85rem; height: 180px; overflow-y: auto; padding: 10px; border-radius: 6px; margin-bottom: 10px; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
-    .log-current-file { color: #f1c40f; margin-bottom: 10px; font-family: monospace; font-size: 0.85rem; word-break: break-all; }
-    .progress { background: #e9ecef; border-radius: 0.5rem; height: 2.5rem; overflow: hidden; position: relative; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2); }
-    .progress-bar { background: linear-gradient(45deg, #667eea, #764ba2); height: 100%; transition: width 0.4s ease; width: 0%; position: absolute; top: 0; left: 0; z-index: 1; }
-    .progress-text { position: absolute; width: 100%; height: 100%; top: 0; left: 0; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 1.1rem; text-shadow: 1px 1px 3px rgba(0,0,0,0.9), -1px -1px 3px rgba(0,0,0,0.9); z-index: 2; pointer-events: none; }
-    
-    .checkbox-group { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
-    .checkbox-group input[type="checkbox"] { width: auto; margin: 0; }
-    .export-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
-    .export-section h4 { margin-bottom: 0.5rem; color: #495057; font-size: 1rem; }
-    .checkbox-list { max-height: 250px; overflow-y: auto; background: #f8f9fa; padding: 1rem; border-radius: 8px; border: 1px solid #ced4da; margin-top: 1rem; }
-    .checkbox-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; }
-    .ip-list { background: #f8f9fa; padding: 1rem; border-radius: 8px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.9rem; }
-    .ip-item { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid #dee2e6; }
-    .ip-status { padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
-    .ip-status.online { background: #d4edda; color: #155724; }
-    .ip-status.offline { background: #f8d7da; color: #721c24; }
-    .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
-    .modal-content { background-color: white; margin: 5% auto; padding: 0; border-radius: 12px; width: 80%; max-width: 800px; max-height: 80%; overflow: hidden; }
-    .modal-header { background: #667eea; color: white; padding: 1rem; display: flex; justify-content: space-between; align-items: center; }
-    .modal-header h3 { margin: 0; flex: 1; }
-    .close { color: white; font-size: 1.5rem; font-weight: bold; cursor: pointer; background: none; border: none; }
-    .close:hover { opacity: 0.7; }
-    .modal-body { padding: 1rem; max-height: 400px; overflow-y: auto; }
-    .file-list { list-style: none; padding: 0; }
-    .file-item { padding: 0.5rem; border-bottom: 1px solid #eee; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; }
-    .file-item:hover { background: #f8f9fa; }
-    .file-item.folder { color: #667eea; }
-    .file-item.parent { color: #6c757d; font-style: italic; }
-    .current-path { background: #f8f9fa; padding: 0.5rem; border-radius: 4px; margin-bottom: 1rem; font-family: monospace; }
-    .modal-footer { padding: 1rem; border-top: 1px solid #eee; display: flex; gap: 1rem; justify-content: flex-end; }
-    .message-container { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; pointer-events: none; padding: 1rem; }
-    .alert { padding: 1rem; border-radius: 6px; margin-bottom: 1rem; border: 1px solid transparent; pointer-events: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15); backdrop-filter: blur(10px); animation: slideDown 0.3s ease-out; }
-    @keyframes slideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-    .alert-success { background: rgba(212, 237, 218, 0.95); color: #155724; border-color: #c3e6cb; }
-    .alert-danger { background: rgba(248, 215, 218, 0.95); color: #721c24; border-color: #f5c6cb; }
-    .alert-info { background: rgba(209, 236, 241, 0.95); color: #0c5460; border-color: #bee5eb; }
-    .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
-    .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-    input:checked + .slider { background-color: #4CAF50; }
-    input:checked + .slider:before { transform: translateX(26px); }
-    .switch-test input:checked + .slider { background-color: #e67e22; }
-    .toggle-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
-    .toggle-item:last-child { border-bottom: none; }
-    .toggle-item span { font-weight: 500; color: #2c3e50; }
-    .service-table, .user-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    .service-table th, .service-table td, .user-table th, .user-table td { border: 1px solid #dee2e6; padding: 0.75rem; text-align: left; vertical-align: middle; }
-    .service-table th, .user-table th { background: #e9ecef; font-weight: 600; }
-    .service-table .actions, .user-table .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-    .checkbox-item-alias { display: grid; grid-template-columns: 20px 1fr 1fr; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
-    .checkbox-item input[type="checkbox"] { width: auto; }
-    .grid-2-col { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
-    @media (max-width: 992px) { .grid-2-col { grid-template-columns: 1fr; } }
-    @media (max-width: 768px) { .tabs { flex-direction: column; } .path-input-group { flex-direction: column; align-items: flex-start; } .path-input-group label { min-width: auto; } .ramal-container { grid-template-columns: 1fr; } .modal-content { width: 95%; margin: 2% auto; } .time-input-group { grid-template-columns: 1fr; } .export-grid { grid-template-columns: 1fr; } }
-</style>
-</head>
-<body>
-
-<div class="header">
-    <div class="header-title">
-        <h1><i class="fas fa-cogs"></i> {{ t('Sistema de Gestão de Imagens') }}</h1>
-        <p>{{ t('Sistema Avançado com Turnos, Mosaicos 4K e Modo Teste Dinâmico') }}</p>
-    </div>
-    <div class="user-info">
-        <span><i class="fas fa-user"></i> {{ session.username }}</span>
-        <a href="{{ url_for('logout') }}" class="btn btn-sm btn-danger">
-            <i class="fas fa-sign-out-alt"></i> {{ t('Sair') }}
-        </a>
-        <br>
-        <a href="/historico_externo" target="_blank" style="text-decoration: none; color: #667eea; font-size: 0.9rem; font-weight: bold; margin-top: 5px; display: inline-block;">
-            <i class="fas fa-external-link-alt"></i> {{ t('Portal Histórico Público') }}
-        </a>
-    </div>
-</div>
-
-<div class="container">
-    <div class="tabs">
-        <button class="tab active" onclick="showTab('configuracao')"><i class="fas fa-cog"></i> {{ t('Configuração') }}</button>
-        <button class="tab" onclick="showTab('backup_pkiris')"><i class="fas fa-file-archive"></i> {{ t('Backup PKIRIS') }}</button>
-        <button class="tab" onclick="showTab('backup_historicos')"><i class="fas fa-history"></i> {{ t('Backup Históricos') }}</button>
-        <button class="tab" onclick="showTab('backup_artigos')"><i class="fas fa-box-open"></i> {{ t('Backup Artigos') }}</button>
-        <button class="tab" onclick="showTab('servicos')"><i class="fas fa-server"></i> {{ t('Gestão de Serviços') }}</button>
-        <button class="tab" onclick="showTab('exportar')"><i class="fas fa-download"></i> {{ t('Exportar') }}</button>
-        <button class="tab" onclick="showTab('diagnostics')"><i class="fas fa-chart-line"></i> {{ t('Diagnóstico') }}</button>
-        <button class="tab" onclick="showTab('gestao_mosaico')"><i class="fas fa-tasks"></i> {{ t('Gestão Mosaico') }}</button>
-        <button class="tab" onclick="showTab('config_mosaico')"><i class="fas fa-th"></i> {{ t('Config Mosaico') }}</button>
-        <button class="tab" onclick="showTab('users')"><i class="fas fa-users"></i> {{ t('Utilizadores') }}</button>
-        <button class="tab" onclick="showTab('logs')"><i class="fas fa-file-alt"></i> {{ t('Logs') }}</button>
-    </div>
-
-    <div id="configuracao" class="tab-content active">
-        <div class="section">
-            <h3><i class="fas fa-sliders-h"></i> {{ t('Configuração Geral') }}</h3>
-            <form id="configGeralForm">
-                <div class="path-input-group">
-                    <label>{{ t('SSD Path:') }}</label>
-                    <input type="text" name="ssd_path" id="ssd_path" class="form-control">
-                    <button type="button" class="browse-btn" onclick="openFileBrowser('ssd_path')"><i class="fas fa-folder-open"></i></button>
-                    <span class="status-led" id="led_ssd_path"></span>
-                </div>
-                <div class="path-input-group">
-                    <label>{{ t('Pasta para Mirror SSD:') }}</label>
-                    <input type="text" name="mirror_source_path" id="mirror_source_path" class="form-control">
-                    <button type="button" class="browse-btn" onclick="openFileBrowser('mirror_source_path')"><i class="fas fa-folder-open"></i></button>
-                    <span class="status-led" id="led_mirror_source_path"></span>
-                </div>
-                <div class="path-input-group" style="display: none;">
-                    <label>{{ t('Pasta Config Mosaico (OBSOLETO):') }}</label>
-                    <input type="text" name="mosaic_config_folder" id="mosaic_config_folder" class="form-control">
-                </div>
-                <div class="path-input-group">
-                    <label>{{ t('Caminho Ficheiro de Log:') }}</label>
-                    <input type="text" name="log_file_path" id="log_file_path" class="form-control">
-                    <button type="button" class="browse-btn" onclick="openFileBrowser('log_file_path')"><i class="fas fa-file-alt"></i></button>
-                    <span class="status-led" id="led_log_file_path"></span>
-                </div>
-                <div class="checkbox-group">
-                    <input type="checkbox" name="mirror_include_subfolders" id="mirror_include_subfolders">
-                    <label for="mirror_include_subfolders">{{ t('Incluir subpastas no mirror SSD') }}</label>
-                </div>
-                <div class="path-input-group">
-                    <label>{{ t('Retenção SSD (dias):') }}</label>
-                    <input type="number" name="ssd_retention_days" id="ssd_retention_days" class="form-control">
-                </div>
-                <div class="path-input-group">
-                    <label>{{ t('Retenção HDD (meses):') }}</label>
-                    <input type="number" name="hdd_retention_months" id="hdd_retention_months" class="form-control">
-                </div>
-                <div class="path-input-group">
-                    <label>{{ t('Intervalo verificação (seg):') }}</label>
-                    <input type="number" name="scan_interval_sec" id="scan_interval_sec" class="form-control">
-                </div>
-                <h4><i class="fas fa-clock"></i> {{ t('Configuração de Turnos') }}</h4>
-                <div class="time-input-group">
-                    <label>{{ t('1º Turno:') }}</label>
-                    <input type="time" name="turno1_inicio" id="turno1_inicio" class="form-control">
-                    <input type="time" name="turno1_fim" id="turno1_fim" class="form-control">
-                    <span>{{ t('Início - Fim') }}</span>
-                </div>
-                <div class="time-input-group">
-                    <label>{{ t('2º Turno:') }}</label>
-                    <input type="time" name="turno2_inicio" id="turno2_inicio" class="form-control">
-                    <input type="time" name="turno2_fim" id="turno2_fim" class="form-control">
-                    <span>{{ t('Início - Fim') }}</span>
-                </div>
-                <div class="time-input-group">
-                    <label>{{ t('3º Turno:') }}</label>
-                    <input type="time" name="turno3_inicio" id="turno3_inicio" class="form-control">
-                    <input type="time" name="turno3_fim" id="turno3_fim" class="form-control">
-                    <span>{{ t('Início - Fim') }}</span>
-                </div>
-                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configuração Geral') }}</button>
-            </form>
-        </div>
-        
-        <div class="section" style="border-left-color: #f1c40f;">
-            <h3><i class="fas fa-search"></i> {{ t('Análise Global de Artigos (JSON) - Retroativa') }}</h3>
-            <p>{{ t('O sistema já atualiza os artigos automaticamente durante as cópias em tempo real. Use esta ferramenta apenas se precisar de forçar a leitura de pastas históricas antigas não registadas.') }}</p>
-            <div class="path-input-group">
-                <label style="min-width: 150px; font-weight:bold; color: #d35400;">{{ t('Pasta Raiz (Obrigatório):') }}</label>
-                <input type="text" id="article_analysis_path" name="article_analysis_path" class="form-control" placeholder="{{ t('Aponte para a pasta origem na NAS. (ex: /volume1/inspecao)') }}" onchange="checkPathAccess(this.id)">
-                <button type="button" class="browse-btn" onclick="openFileBrowser('article_analysis_path')"><i class="fas fa-folder-open"></i></button>
-                <span class="status-led" id="led_article_analysis_path"></span>
-            </div>
-            <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
-                <button type="button" class="btn btn-primary" onclick="startArticleAnalysis()"><i class="fas fa-play"></i> {{ t('Iniciar Análise') }}</button>
-                <button type="button" class="btn btn-warning" onclick="resetArticleAnalysis()"><i class="fas fa-redo"></i> {{ t('Forçar Reset (Nova Análise)') }}</button>
-                <button type="button" class="btn btn-danger" onclick="stopArticleAnalysis()"><i class="fas fa-stop"></i> {{ t('Parar Análise') }}</button>
-            </div>
-            <div id="articleAnalysisProgress" style="display: none; margin-top: 15px;">
-                <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 5px;">
-                    <span id="aa_status_text" style="color: #3498db;">{{ t('A iniciar...') }}</span>
-                    <span id="aa_eta_text" style="color: #e74c3c;">{{ t('ETA: --:--') }}</span>
-                </div>
-                
-                <div class="log-window" id="aa_log_window"></div>
-                <div class="log-current-file" id="aa_current_file">{{ t('Ficheiro atual: ...') }}</div>
-                
-                <div class="progress-container">
-                    <div class="progress">
-                        <div class="progress-bar" id="aa_progress_bar" style="width: 0%"></div>
-                        <div class="progress-text" id="aa_progress_text">{{ t('A preparar...') }}</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        {% for linha in ['21', '22', '23', '24', '31', '32', '33'] %}
-        <div class="linha-card" id="linha-card-{{ linha }}">
-            <h4><i class="fas fa-industry"></i> {{ t('Linha') }} {{ linha }}</h4>
-            <div class="machine-section" style="background: #f0f4ff; border-color: #667eea;">
-                <h5><i class="fas fa-sync-alt"></i> {{ t('Configurações da Linha') }} {{ linha }}</h5>
-                <div class="path-input-group">
-                    <label>{{ t('Ativar Modo Ciclo:') }}</label>
-                    <label class="switch"><input type="checkbox" name="cycle_mode_active_{{ linha }}" id="cycle_mode_active_{{ linha }}"><span class="slider"></span></label>
-                </div>
-                <div class="path-input-group">
-                    <label>{{ t('Tempo de Ciclo (seg):') }}</label>
-                    <input type="number" name="cycle_time_sec_{{ linha }}" id="cycle_time_sec_{{ linha }}" class="form-control" style="max-width: 150px;">
-                </div>
-                <div class="path-input-group" style="margin-top: 15px; border-top: 1px solid #c3d0ff; padding-top: 10px;">
-                    <label style="color: #e67e22; min-width: 250px;"><i class="fas fa-vial"></i> {{ t('Ativar Modo Teste (Caminhos Alt.):') }}</label>
-                    <label class="switch switch-test"><input type="checkbox" name="use_test_mode_{{ linha }}" id="use_test_mode_{{ linha }}"><span class="slider"></span></label>
-                    <span style="font-size: 0.85rem; color: #666; margin-left: 10px;">{{ t('Força os serviços a usar os Caminhos de Teste.') }}</span>
-                </div>
-            </div>
-
-            {% for maquina in ['lateral', 'fundo'] %}
-            <div class="machine-section">
-                <h5><i class="fas fa-camera"></i> {{ t('Lateral') if maquina == 'lateral' else t('Topo e Fundo') }}</h5>
-                
-                <div style="background: #f8f9fa; border-left: 3px solid #3498db; padding: 10px; margin-bottom: 10px; border-radius: 4px;">
-                    <h6 style="margin-top: 0; margin-bottom: 10px; color: #3498db;"><i class="fas fa-server"></i> {{ t('Caminhos de Produção') }}</h6>
-                    <div class="path-input-group">
-                        <label>{{ t('Origem (PROD):') }}</label>
-                        <input type="text" name="linhas[{{ linha }}][{{ maquina }}][src_prod]" id="origem_prod_{{ linha }}_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                        <button type="button" class="browse-btn" onclick="openFileBrowser('origem_prod_{{ linha }}_{{ maquina }}')"><i class="fas fa-network-wired"></i></button>
-                        <span class="status-led" id="led_origem_prod_{{ linha }}_{{ maquina }}"></span>
-                    </div>
-                    <div class="path-input-group">
-                        <label>{{ t('Destino (PROD):') }}</label>
-                        <input type="text" name="linhas[{{ linha }}][{{ maquina }}][dst_prod]" id="destino_prod_{{ linha }}_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                        <button type="button" class="browse-btn" onclick="openFileBrowser('destino_prod_{{ linha }}_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
-                        <span class="status-led" id="led_destino_prod_{{ linha }}_{{ maquina }}"></span>
-                    </div>
-                </div>
-                
-                <div style="background: #fffcf5; border-left: 3px solid #f39c12; padding: 10px; margin-bottom: 10px; border-radius: 4px;">
-                    <h6 style="margin-top: 0; margin-bottom: 10px; color: #f39c12;"><i class="fas fa-flask"></i> {{ t('Caminhos de Teste') }}</h6>
-                    <div class="path-input-group">
-                        <label>{{ t('Origem (TESTE):') }}</label>
-                        <input type="text" name="linhas[{{ linha }}][{{ maquina }}][src_test]" id="origem_test_{{ linha }}_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                        <button type="button" class="browse-btn" onclick="openFileBrowser('origem_test_{{ linha }}_{{ maquina }}')"><i class="fas fa-network-wired"></i></button>
-                        <span class="status-led" id="led_origem_test_{{ linha }}_{{ maquina }}"></span>
-                    </div>
-                    <div class="path-input-group">
-                        <label>{{ t('Destino (TESTE):') }}</label>
-                        <input type="text" name="linhas[{{ linha }}][{{ maquina }}][dst_test]" id="destino_test_{{ linha }}_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                        <button type="button" class="browse-btn" onclick="openFileBrowser('destino_test_{{ linha }}_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
-                        <span class="status-led" id="led_destino_test_{{ linha }}_{{ maquina }}"></span>
-                    </div>
-                </div>
-                
-                <div class="path-input-group">
-                    <label>{{ t('Porta Mosaico:') }}</label>
-                    <input type="number" name="linhas[{{ linha }}][{{ maquina }}][mosaic_port]" id="mosaic_port_{{ linha }}_{{ maquina }}" class="form-control">
-                </div>
-                <div class="checkbox-group">
-                    <input type="checkbox" name="linhas[{{ linha }}][{{ maquina }}][delete_source]" id="delete_source_{{ linha }}_{{ maquina }}">
-                    <label for="delete_source_{{ linha }}_{{ maquina }}">{{ t('Excluir arquivo origem após cópia') }}</label>
-                </div>
-                <div class="machine-buttons">
-                    <button type="button" class="btn btn-primary btn-sm" onclick="toggleBackup('{{ linha }}', '{{ maquina }}')"><i class="fas fa-play"></i> {{ t('Backup') }}</button>
-                    <span class="service-led" id="service_backup_{{ linha }}_{{ maquina }}"></span>
-                    <button type="button" class="btn btn-info btn-sm" onclick="toggleMosaico('{{ linha }}', '{{ maquina }}')"><i class="fas fa-th"></i> {{ t('Mosaico') }}</button>
-                    <span class="service-led" id="service_mosaic_{{ linha }}_{{ maquina }}"></span>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% endfor %}
-
-        <div class="linha-card" id="linha-card-34">
-            <h4><i class="fas fa-industry"></i> {{ t('Linha 34 - Configuração Especial') }}</h4>
-            <div class="machine-section" style="background: #f0f4ff; border-color: #667eea;">
-                <h5><i class="fas fa-sync-alt"></i> {{ t('Configurações da Linha 34') }}</h5>
-                <div class="path-input-group">
-                    <label>{{ t('Ativar Modo Ciclo:') }}</label>
-                    <label class="switch"><input type="checkbox" name="cycle_mode_active_34" id="cycle_mode_active_34"><span class="slider"></span></label>
-                </div>
-                <div class="path-input-group">
-                    <label>{{ t('Tempo de Ciclo (seg):') }}</label>
-                    <input type="number" name="cycle_time_sec_34" id="cycle_time_sec_34" class="form-control" style="max-width: 150px;">
-                </div>
-                <div class="path-input-group" style="margin-top: 15px; border-top: 1px solid #c3d0ff; padding-top: 10px;">
-                    <label style="color: #e67e22; min-width: 250px;"><i class="fas fa-vial"></i> {{ t('Ativar Modo Teste (Caminhos Alt.):') }}</label>
-                    <label class="switch switch-test"><input type="checkbox" name="use_test_mode_34" id="use_test_mode_34"><span class="slider"></span></label>
-                </div>
-            </div>
-
-            <div class="ramal-container">
-                {% for ramal in [1, 2] %}
-                <div class="ramal">
-                    <h5><i class="fas fa-sitemap"></i> {{ t('Ramal') }} {{ ramal }}</h5>
-                    {% for maq in ['lateral', 'fundo'] %}
-                    {% set maquina = maq ~ ramal %}
-                    <div class="machine-section">
-                        <h6><i class="fas fa-camera"></i> {{ t('Lateral') if maq == 'lateral' else t('Fundo') }} {{ ramal }}</h6>
-                        
-                        <div style="background: #f8f9fa; border-left: 3px solid #3498db; padding: 10px; margin-bottom: 10px; border-radius: 4px;">
-                            <h6 style="margin-top: 0; margin-bottom: 10px; color: #3498db;">{{ t('Caminhos de Produção') }}</h6>
-                            <div class="path-input-group">
-                                <label>{{ t('Origem (PROD):') }}</label>
-                                <input type="text" name="linhas[34][{{ maquina }}][src_prod]" id="origem_prod_34_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('origem_prod_34_{{ maquina }}')"><i class="fas fa-network-wired"></i></button>
-                                <span class="status-led" id="led_origem_prod_34_{{ maquina }}"></span>
-                            </div>
-                            <div class="path-input-group">
-                                <label>{{ t('Destino (PROD):') }}</label>
-                                <input type="text" name="linhas[34][{{ maquina }}][dst_prod]" id="destino_prod_34_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('destino_prod_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
-                                <span class="status-led" id="led_destino_prod_34_{{ maquina }}"></span>
-                            </div>
-                        </div>
-                        
-                        <div style="background: #fffcf5; border-left: 3px solid #f39c12; padding: 10px; margin-bottom: 10px; border-radius: 4px;">
-                            <h6 style="margin-top: 0; margin-bottom: 10px; color: #f39c12;">{{ t('Caminhos de Teste') }}</h6>
-                            <div class="path-input-group">
-                                <label>{{ t('Origem (TESTE):') }}</label>
-                                <input type="text" name="linhas[34][{{ maquina }}][src_test]" id="origem_test_34_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('origem_test_34_{{ maquina }}')"><i class="fas fa-network-wired"></i></button>
-                                <span class="status-led" id="led_origem_test_34_{{ maquina }}"></span>
-                            </div>
-                            <div class="path-input-group">
-                                <label>{{ t('Destino (TESTE):') }}</label>
-                                <input type="text" name="linhas[34][{{ maquina }}][dst_test]" id="destino_test_34_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('destino_test_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
-                                <span class="status-led" id="led_destino_test_34_{{ maquina }}"></span>
-                            </div>
-                        </div>
-
-                        <div class="path-input-group">
-                            <label>{{ t('Porta Mosaico:') }}</label>
-                            <input type="number" name="linhas[34][{{ maquina }}][mosaic_port]" id="mosaic_port_34_{{ maquina }}" class="form-control">
-                        </div>
-                        <div class="checkbox-group">
-                            <input type="checkbox" name="linhas[34][{{ maquina }}][delete_source]" id="delete_source_34_{{ maquina }}">
-                            <label for="delete_source_34_{{ maquina }}">{{ t('Excluir arquivo origem') }}</label>
-                        </div>
-                        <div class="machine-buttons">
-                            <button type="button" class="btn btn-primary btn-sm" onclick="toggleBackup('34', '{{ maquina }}')"><i class="fas fa-play"></i> {{ t('Backup') }}</button>
-                            <span class="service-led" id="service_backup_34_{{ maquina }}"></span>
-                            <button type="button" class="btn btn-info btn-sm" onclick="toggleMosaico('34', '{{ maquina }}')"><i class="fas fa-th"></i> {{ t('Mosaico') }}</button>
-                            <span class="service-led" id="service_mosaic_34_{{ maquina }}"></span>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-
-        <div class="linha-card" id="linha-card-global" style="border-left-color: #f39c12;">
-            <h4 style="color: #f39c12; background: rgba(243, 156, 18, 0.1);"><i class="fas fa-globe"></i> {{ t('Visão Global (Dashboard 4K)') }}</h4>
-            <div class="machine-section" style="background: #fffcf5; border-color: #f39c12;">
-                <h5><i class="fas fa-tv"></i> {{ t('Configuração dos Servidores Overview') }}</h5>
-                <div class="path-input-group"><label>{{ t('Porta Lateral:') }}</label><input type="number" id="overview_port_lateral" class="form-control" style="max-width: 150px;"></div>
-                <div class="path-input-group"><label>{{ t('Porta Fundo:') }}</label><input type="number" id="overview_port_fundo" class="form-control" style="max-width: 150px;"></div>
-                <div class="path-input-group"><label>{{ t('Ativar Ciclo Auto:') }}</label><label class="switch"><input type="checkbox" id="overview_cycle_mode_active"><span class="slider"></span></label></div>
-                <div class="path-input-group"><label>{{ t('Tempo de Ciclo (seg):') }}</label><input type="number" id="overview_cycle_time_sec" class="form-control" style="max-width: 150px;"></div>
-                <div class="machine-buttons" style="margin-top: 15px;">
-                    <button type="button" class="btn btn-warning btn-sm" onclick="toggleMosaico('Global', 'lateral')"><i class="fas fa-power-off"></i> {{ t('Ativar Dashboard Lateral') }}</button>
-                    <span class="service-led" id="service_mosaic_Global_lateral" title="{{ t('Status do Dashboard Lateral') }}"></span>
-                    <button type="button" class="btn btn-warning btn-sm" onclick="toggleMosaico('Global', 'fundo')"><i class="fas fa-power-off"></i> {{ t('Ativar Dashboard Fundo') }}</button>
-                    <span class="service-led" id="service_mosaic_Global_fundo" title="{{ t('Status do Dashboard Fundo') }}"></span>
-                </div>
-            </div>
-        </div>
-
-        <div class="section">
-            <button type="button" class="btn btn-success" onclick="saveAllConfig()"><i class="fas fa-save"></i> {{ t('Gravar Todas as Configurações') }}</button>
-            <button type="button" class="btn btn-info" onclick="checkAllPaths()"><i class="fas fa-check-circle"></i> {{ t('Verificar Caminhos') }}</button>
-            <button type="button" class="btn btn-warning" onclick="startFileCopying()"><i class="fas fa-copy"></i> {{ t('Iniciar Cópia') }}</button>
-            <span class="service-led" id="service_file_copying" title="{{ t('Status do serviço de cópia') }}"></span>
-            <button type="button" class="btn btn-info" onclick="startMirrorSSD()"><i class="fas fa-hdd"></i> {{ t('Iniciar Mirror SSD') }}</button>
-            <span class="service-led" id="service_mirror_ssd"></span>
-            <button type="button" class="btn btn-danger" onclick="stopAllServices()"><i class="fas fa-stop"></i> {{ t('Parar Todos os Serviços') }}</button>
-        </div>
-    </div>
-    
-    <div id="backup_pkiris" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-file-archive"></i> {{ t('Configuração Global Backup PKIRIS') }}</h3>
-            <p>{{ t('Define a pasta base de destino. O sistema irá criar automaticamente subpastas para cada Linha e Máquina (/Linha_XX/Lateral).') }}</p>
-            <form id="pkirisConfigForm">
-                <div class="path-input-group">
-                    <label style="min-width: 200px; font-weight: bold;">{{ t('Retenção PKIRIS (dias):') }}</label>
-                    <input type="number" name="pkiris_retention_days" id="pkiris_retention_days" class="form-control" style="max-width: 150px;">
-                </div>
-                <div class="path-input-group" style="margin-bottom: 20px;">
-                    <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz PKIRIS:') }}</label>
-                    <input type="text" name="pkiris_dst_root" id="pkiris_dst_root" class="form-control">
-                    <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_dst_root')"><i class="fas fa-folder-open"></i></button>
-                </div>
-                
-                <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Onde a máquina gera os .pkiris)') }}</h4>
-                
-                {% for linha in ['21', '22', '23', '24', '31', '32', '33'] %}
-                    <div class="linha-card" style="border-left-color: #8e44ad;">
-                        <h4 style="color: #8e44ad; background: rgba(142, 68, 173, 0.1);">{{ t('Linha') }} {{ linha }}</h4>
-                        <div class="machine-section">
-                            <div class="path-input-group">
-                                <label style="min-width: 200px;">{{ t('Origem PKIRIS (Lateral):') }}</label>
-                                <input type="text" name="pkiris_src_{{ linha }}_lateral" id="pkiris_src_{{ linha }}_lateral" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                            <div class="path-input-group">
-                                <label style="min-width: 200px;">{{ t('Origem PKIRIS (Fundo):') }}</label>
-                                <input type="text" name="pkiris_src_{{ linha }}_fundo" id="pkiris_src_{{ linha }}_fundo" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                        </div>
-                    </div>
-                {% endfor %}
-                
-                <div class="linha-card" style="border-left-color: #8e44ad;">
-                    <h4 style="color: #8e44ad; background: rgba(142, 68, 173, 0.1);">{{ t('Linha 34') }}</h4>
-                    <div class="ramal-container">
-                        {% for ramal in [1, 2] %}
-                        <div class="ramal">
-                            <h5>{{ t('Ramal') }} {{ ramal }}</h5>
-                            {% for maq in ['lateral', 'fundo'] %}
-                            {% set maquina = maq ~ ramal %}
-                            <div class="path-input-group">
-                                <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
-                                <input type="text" name="pkiris_src_34_{{ maquina }}" id="pkiris_src_34_{{ maquina }}" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                            {% endfor %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-
-                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configurações PKIRIS') }}</button>
-            </form>
-        </div>
-        
-        <div class="section" style="border-left-color: #27ae60;">
-            <h3><i class="fas fa-play-circle"></i> {{ t('Controlo do Serviço PKIRIS') }}</h3>
-            <p>{{ t('O serviço corre automaticamente em background para verificar novos ficheiros.') }}</p>
-            <button type="button" class="btn btn-primary" onclick="startPkirisBackup()"><i class="fas fa-play"></i> {{ t('Iniciar Backup PKIRIS') }}</button>
-            <button type="button" class="btn btn-danger" onclick="stopPkirisBackup()"><i class="fas fa-stop"></i> {{ t('Parar Backup PKIRIS') }}</button>
-            <span class="service-led" id="service_pkiris" title="{{ t('Status do serviço PKIRIS') }}"></span>
-        </div>
-    </div>
-    
-    <div id="backup_historicos" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-history"></i> {{ t('Configuração Global Backup Históricos') }}</h3>
-            <p>{{ t('Define a pasta de destino raiz. A árvore criada será do tipo: /Linha_XX/Lateral/Mês/Dia/. Executa periodicamente (aos 55m).') }}</p>
-            <form id="historicosConfigForm">
-                <div class="path-input-group">
-                    <label style="min-width: 200px; font-weight: bold;">{{ t('Retenção Históricos (dias):') }}</label>
-                    <input type="number" name="historicos_retention_days" id="historicos_retention_days" class="form-control" style="max-width: 150px;" placeholder="365">
-                </div>
-                <div class="path-input-group" style="margin-bottom: 20px;">
-                    <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz Históricos:') }}</label>
-                    <input type="text" name="historicos_dst_root" id="historicos_dst_root" class="form-control">
-                    <button type="button" class="browse-btn" onclick="openFileBrowser('historicos_dst_root')"><i class="fas fa-folder-open"></i></button>
-                </div>
-                
-                <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Pastas dos Históricos)') }}</h4>
-                
-                {% for linha in ['21', '22', '23', '24', '31', '32', '33'] %}
-                    <div class="linha-card" style="border-left-color: #34495e;">
-                        <h4 style="color: #34495e; background: rgba(52, 73, 94, 0.1);">{{ t('Linha') }} {{ linha }}</h4>
-                        <div class="machine-section">
-                            <div class="path-input-group">
-                                <label style="min-width: 200px;">{{ t('Origem Histórico (Lateral):') }}</label>
-                                <input type="text" name="historico_src_{{ linha }}_lateral" id="historico_src_{{ linha }}_lateral" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                            <div class="path-input-group">
-                                <label style="min-width: 200px;">{{ t('Origem Histórico (Fundo):') }}</label>
-                                <input type="text" name="historico_src_{{ linha }}_fundo" id="historico_src_{{ linha }}_fundo" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                        </div>
-                    </div>
-                {% endfor %}
-                
-                <div class="linha-card" style="border-left-color: #34495e;">
-                    <h4 style="color: #34495e; background: rgba(52, 73, 94, 0.1);">{{ t('Linha 34') }}</h4>
-                    <div class="ramal-container">
-                        {% for ramal in [1, 2] %}
-                        <div class="ramal">
-                            <h5>{{ t('Ramal') }} {{ ramal }}</h5>
-                            {% for maq in ['lateral', 'fundo'] %}
-                            {% set maquina = maq ~ ramal %}
-                            <div class="path-input-group">
-                                <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
-                                <input type="text" name="historico_src_34_{{ maquina }}" id="historico_src_34_{{ maquina }}" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                            {% endfor %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-
-                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configurações Históricos') }}</button>
-            </form>
-        </div>
-        
-        <div class="section" style="border-left-color: #27ae60;">
-            <h3><i class="fas fa-play-circle"></i> {{ t('Controlo do Serviço Históricos') }}</h3>
-            <button type="button" class="btn btn-primary" onclick="startHistoricosBackup()"><i class="fas fa-play"></i> {{ t('Iniciar Backup Históricos') }}</button>
-            <button type="button" class="btn btn-danger" onclick="stopHistoricosBackup()"><i class="fas fa-stop"></i> {{ t('Parar Backup Históricos') }}</button>
-            <span class="service-led" id="service_historicos" title="{{ t('Status do serviço Históricos') }}"></span>
-        </div>
-    </div>
-    
-    <div id="backup_artigos" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-box-open"></i> {{ t('Configuração Global Backup Artigos') }}</h3>
-            <p>{{ t('Define a pasta de destino raiz. A árvore criada será do tipo: /Linha_XX/Lateral/Mês/Dia/. Executa periodicamente.') }}</p>
-            <form id="artigosConfigForm">
-                <div class="path-input-group">
-                    <label style="min-width: 200px; font-weight: bold;">{{ t('Retenção Artigos (dias):') }}</label>
-                    <input type="number" name="artigos_retention_days" id="artigos_retention_days" class="form-control" style="max-width: 150px;" placeholder="365">
-                </div>
-                <div class="path-input-group" style="margin-bottom: 20px;">
-                    <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz Artigos:') }}</label>
-                    <input type="text" name="artigos_dst_root" id="artigos_dst_root" class="form-control">
-                    <button type="button" class="browse-btn" onclick="openFileBrowser('artigos_dst_root')"><i class="fas fa-folder-open"></i></button>
-                </div>
-                
-                <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Pastas dos Artigos)') }}</h4>
-                
-                {% for linha in ['21', '22', '23', '24', '31', '32', '33'] %}
-                    <div class="linha-card" style="border-left-color: #d35400;">
-                        <h4 style="color: #d35400; background: rgba(211, 84, 0, 0.1);">{{ t('Linha') }} {{ linha }}</h4>
-                        <div class="machine-section">
-                            <div class="path-input-group">
-                                <label style="min-width: 200px;">{{ t('Origem Artigo (Lateral):') }}</label>
-                                <input type="text" name="artigo_src_{{ linha }}_lateral" id="artigo_src_{{ linha }}_lateral" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                            <div class="path-input-group">
-                                <label style="min-width: 200px;">{{ t('Origem Artigo (Fundo):') }}</label>
-                                <input type="text" name="artigo_src_{{ linha }}_fundo" id="artigo_src_{{ linha }}_fundo" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                        </div>
-                    </div>
-                {% endfor %}
-                
-                <div class="linha-card" style="border-left-color: #d35400;">
-                    <h4 style="color: #d35400; background: rgba(211, 84, 0, 0.1);">{{ t('Linha 34') }}</h4>
-                    <div class="ramal-container">
-                        {% for ramal in [1, 2] %}
-                        <div class="ramal">
-                            <h5>{{ t('Ramal') }} {{ ramal }}</h5>
-                            {% for maq in ['lateral', 'fundo'] %}
-                            {% set maquina = maq ~ ramal %}
-                            <div class="path-input-group">
-                                <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
-                                <input type="text" name="artigo_src_34_{{ maquina }}" id="artigo_src_34_{{ maquina }}" class="form-control">
-                                <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
-                            </div>
-                            {% endfor %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-
-                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configurações Artigos') }}</button>
-            </form>
-        </div>
-        
-        <div class="section" style="border-left-color: #27ae60;">
-            <h3><i class="fas fa-play-circle"></i> {{ t('Controlo do Serviço Artigos') }}</h3>
-            <button type="button" class="btn btn-primary" onclick="startArtigosBackup()"><i class="fas fa-play"></i> {{ t('Iniciar Backup Artigos') }}</button>
-            <button type="button" class="btn btn-danger" onclick="stopArtigosBackup()"><i class="fas fa-stop"></i> {{ t('Parar Backup Artigos') }}</button>
-            <span class="service-led" id="service_artigos" title="{{ t('Status do serviço Artigos') }}"></span>
-        </div>
-    </div>
-
-    <div id="servicos" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-server"></i> {{ t('Status Global de Todos os Serviços') }}</h3>
-            <table class="service-table" style="font-size: 0.9rem;">
-                <thead>
-                    <tr>
-                        <th>{{ t('Linha') }}</th>
-                        <th>{{ t('Máquina') }}</th>
-                        <th>{{ t('Imagens') }}</th>
-                        <th>{{ t('Mosaico') }}</th>
-                        <th>{{ t('PKIRIS') }}</th>
-                        <th>{{ t('Históricos') }}</th>
-                        <th>{{ t('Artigos') }}</th>
-                    </tr>
-                </thead>
-                <tbody id="service-status-table-body"></tbody>
-            </table>
-        </div>
-        <div class="section">
-            <h3><i class="fas fa-power-off"></i> {{ t('Controlo Global') }}</h3>
-            <div style="text-align: center; margin-bottom: 2rem;">
-                <button class="btn btn-success" onclick="startAll()"><i class="fas fa-play"></i> {{ t('INICIAR TUDO') }}</button>
-                <button class="btn btn-danger" onclick="stopAll()"><i class="fas fa-stop"></i> {{ t('PARAR TUDO') }}</button>
-                <button type="button" class="btn btn-info" onclick="checkServices()"><i class="fas fa-check"></i> {{ t('Check Serviços') }}</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="exportar" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-download"></i> {{ t('Exportação Seletiva') }}</h3>
-            <form id="exportForm">
-                <div class="export-grid">
-                    <div class="export-section">
-                        <h4><i class="fas fa-calendar-alt"></i> {{ t('Data de Exportação') }}</h4>
-                        <div class="form-group"><input type="date" name="export_date" class="form-control" required></div>
-                    </div>
-                    <div class="export-section">
-                        <h4><i class="fas fa-clock"></i> {{ t('Turnos') }}</h4>
-                        <div class="checkbox-list">
-                            <div class="checkbox-item"><input type="checkbox" name="turnos" value="1" id="export_turno1"><label for="export_turno1">{{ t('1º Turno (06:00-14:00)') }}</label></div>
-                            <div class="checkbox-item"><input type="checkbox" name="turnos" value="2" id="export_turno2"><label for="export_turno2">{{ t('2º Turno (14:00-22:00)') }}</label></div>
-                            <div class="checkbox-item"><input type="checkbox" name="turnos" value="3" id="export_turno3"><label for="export_turno3">{{ t('3º Turno (22:00-06:00)') }}</label></div>
-                        </div>
-                    </div>
-                    <div class="export-section">
-                        <h4><i class="fas fa-industry"></i> {{ t('Máquinas de Inspeção') }}</h4>
-                        <div class="checkbox-list" id="machines-list"></div>
-                    </div>
-                </div>
-                <div class="form-group"><label><input type="checkbox" name="compress" checked> {{ t('Comprimir exportação (ZIP)') }}</label></div>
-                <button type="submit" class="btn btn-primary" id="btn-export-submit"><i class="fas fa-download"></i> {{ t('Iniciar Exportação') }}</button>
-            </form>
-            <div id="exportProgress" style="display: none; margin-top: 20px;">
-                <p id="progressText" style="font-weight: bold; margin-bottom: 5px;">{{ t('A preparar ficheiros... 0%') }}</p>
-                <div class="progress"><div class="progress-bar" id="progressBar" style="width: 0%">0%</div></div>
-            </div>
-        </div>
-    </div>
-
-    <div id="diagnostics" class="tab-content">
-        <div class="stats-grid">
-            <div class="stats-card"><span class="stats-value" id="current-shift">-</span><div class="stats-label">{{ t('Turno Atual') }}</div></div>
-            <div class="stats-card"><span class="stats-value" id="volume1-usage">-</span><div class="stats-label">{{ t('Volume1 Usado') }}</div></div>
-            <div class="stats-card"><span class="stats-value" id="volume2-usage">-</span><div class="stats-label">{{ t('Volume2 (SSD) Usado') }}</div></div>
-            <div class="stats-card"><span class="stats-value" id="system-load">-</span><div class="stats-label">{{ t('CPU Usage') }}</div></div>
-            <div class="stats-card"><span class="stats-value" id="memory-usage">-</span><div class="stats-label">{{ t('RAM Usage') }}</div></div>
-            <div class="stats-card"><span class="stats-value" id="files-copied-shift">0</span><div class="stats-label">{{ t('Arquivos Copiados (Turno)') }}</div></div>
-            <div class="stats-card"><span class="stats-value" id="files-copied-day">0</span><div class="stats-label">{{ t('Arquivos Copiados (Dia)') }}</div></div>
-        </div>
-        <div class="section">
-            <h3><i class="fas fa-heartbeat"></i> {{ t('Estado dos Serviços') }}</h3>
-            <div id="services-status"><p>{{ t('Carregando estado dos serviços...') }}</p></div>
-            <button class="btn btn-info" onclick="checkServices()"><i class="fas fa-check"></i> {{ t('Check Serviços') }}</button>
-        </div>
-        <div id="directories-list-container" class="section">
-            <h3><i class="fas fa-folder"></i> {{ t('Diretórios Gravados') }}</h3>
-            <div id="directories-list" style="max-height:200px; overflow-y:auto; background:#f8f9fa; padding:1rem; font-family:monospace;"></div>
-            <button class="btn btn-info" onclick="loadDirectories()"><i class="fas fa-folder-open"></i> {{ t('Check Diretórios') }}</button>
-        </div>
-        <div class="section">
-            <h3><i class="fas fa-network-wired"></i> {{ t('IPs Conectados') }}</h3>
-            <div class="ip-list" id="connected-ips"><p>{{ t('Carregando lista de IPs...') }}</p></div>
-            <button class="btn btn-info" onclick="loadConnectedIPs()"><i class="fas fa-sync"></i> {{ t('Atualizar IPs') }}</button>
-        </div>
-        <div class="section">
-            <h3><i class="fas fa-copy"></i> {{ t('Status da Cópia de Arquivos') }}</h3>
-            <div id="copy-status"><p>{{ t('Sistema de cópia parado') }}</p></div>
-        </div>
-    </div>
-    
-    <div id="gestao_mosaico" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-tasks"></i> {{ t('Gestão de Processos do Mosaico') }}</h3>
-            <button class="btn btn-info" onclick="loadMosaicStatus()"><i class="fas fa-sync"></i> {{ t('Atualizar Status') }}</button>
-            <table class="service-table">
-                <thead><tr><th>{{ t('Linha') }}</th><th>{{ t('Máquina') }}</th><th>{{ t('Config') }}</th><th>{{ t('Status') }}</th><th>{{ t('PID') }}</th><th>{{ t('Porta') }}</th><th>{{ t('URL') }}</th><th>{{ t('Ações') }}</th></tr></thead>
-                <tbody id="mosaic-status-table-body"></tbody>
-            </table>
-        </div>
-    </div>
-
-    <div id="config_mosaico" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-th"></i> {{ t('Configurações do Mosaico') }}</h3>
-            <div class="form-group">
-                <label for="mosaic_line_selector">{{ t('Linha de Produção / Visão Global:') }}</label>
-                <select id="mosaic_line_selector" class="form-control" onchange="loadMosaicConfig()">
-                    <option value="global">{{ t('Configuração Global (Padrão)') }}</option>
-                    <option value="overview_lateral">{{ t('Visão Global - Laterais') }}</option>
-                    <option value="overview_fundo">{{ t('Visão Global - Fundos') }}</option>
-                    <option value="21">{{ t('Linha 21') }}</option>
-                    <option value="22">{{ t('Linha 22') }}</option>
-                    <option value="23">{{ t('Linha 23') }}</option>
-                    <option value="24">{{ t('Linha 24') }}</option>
-                    <option value="31">{{ t('Linha 31') }}</option>
-                    <option value="32">{{ t('Linha 32') }}</option>
-                    <option value="33">{{ t('Linha 33') }}</option>
-                    <option value="34">{{ t('Linha 34') }}</option>
-                </select>
-            </div>
-
-            <div id="overview_mosaic_config" style="display:none; padding: 15px; background: #fffcf5; border-left: 4px solid #f39c12; margin-bottom: 20px;">
-                <h4 style="color: #f39c12; border-bottom: 2px solid #fce3b6; padding-bottom: 5px;"><i class="fas fa-tv"></i> {{ t('Definições de Ecrã 4K') }}</h4>
-                <div class="form-group">
-                    <label>{{ t('Orientação do Ecrã (Rotação):') }}</label>
-                    <select id="overview_orientation" class="form-control">
-                        <option value="0">{{ t('Normal (0º)') }}</option>
-                        <option value="90">{{ t('Vertical para a Direita (90º)') }}</option>
-                        <option value="180">{{ t('Invertido (180º)') }}</option>
-                        <option value="270">{{ t('Vertical para a Esquerda (270º)') }}</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>{{ t('Layout das Linhas:') }}</label>
-                    <select id="overview_layout" class="form-control">
-                        <option value="horizontal">{{ t('Horizontal (Barras empilhadas)') }}</option>
-                        <option value="vertical">{{ t('Vertical (Colunas lado a lado)') }}</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>{{ t('Máximo de Imagens por Máquina:') }}</label>
-                    <input type="number" id="overview_max_images" class="form-control" placeholder="Ex: 8">
-                </div>
-                <h4 style="color: #f39c12; margin-top: 15px;"><i class="fas fa-check-square"></i> {{ t('Máquinas a Exibir neste Ecrã') }}</h4>
-                <div id="overview_machines_list" class="checkbox-list" style="max-height: 250px; overflow-y: auto;"></div>
-                <button type="button" class="btn btn-warning" onclick="saveOverviewConfig()" style="margin-top: 15px;"><i class="fas fa-save"></i> {{ t('Gravar Visão Global') }}</button>
-            </div>
-
-            <form id="normal_mosaic_config">
-                <div class="path-input-group">
-                    <label>{{ t('Pasta de origem para análise (XML):') }}</label>
-                    <input type="text" name="mosaic_source_path" id="mosaic_source_path" class="form-control">
-                    <button type="button" class="browse-btn" onclick="openFileBrowser('mosaic_source_path')"><i class="fas fa-folder-open"></i> {{ t('Procurar') }}</button>
-                </div>
-                <h4><i class="fas fa-file-code"></i> {{ t('Campos de Dados XML') }}</h4>
-                <button type="button" class="btn btn-primary" id="analyzeXmlBtn" onclick="analyzeXmlFields()"><i class="fas fa-search"></i> {{ t('Re-Analisar Campos XML') }}</button>
-                <div id="xmlFieldsCheckboxes" class="checkbox-list"><p>{{ t('Carregando campos salvos ou pressione "Analisar" para procurar novos.') }}</p></div>
-                <h4><i class="fas fa-images"></i> {{ t('Sobreposição de Texto na Imagem') }}</h4>
-                <div class="form-group"><label for="overlay_top">{{ t('Texto Superior:') }}</label><select id="overlay_top" class="form-control"></select></div>
-                <div class="form-group"><label for="overlay_bottom_left">{{ t('Inferior Esquerdo:') }}</label><select id="overlay_bottom_left" class="form-control"></select></div>
-                <div class="form-group"><label for="overlay_bottom_right">{{ t('Inferior Direito:') }}</label><select id="overlay_bottom_right" class="form-control"></select></div>
-                <h4><i class="fas fa-filter"></i> {{ t('Filtros de Câmera') }}</h4>
-                <button type="button" class="btn btn-primary" id="analyzeNumCamBtn" onclick="analyzeNumCamValues()"><i class="fas fa-camera"></i> {{ t('Analisar Câmeras (NUM_CAM)') }}</button>
-                <div id="numCamFilterCheckboxes" class="checkbox-list"><p>{{ t('Pressione o botão acima para listar os filtros de câmera disponíveis.') }}</p></div>
-                <h4><i class="fas fa-border-all"></i> {{ t('Configuração de Exibição') }}</h4>
-                <div class="form-group">
-                    <label>{{ t('Orientação do Ecrã Mosaico (Graus):') }}</label>
-                    <select id="normal_orientation" class="form-control">
-                        <option value="0">{{ t('Normal (0º)') }}</option>
-                        <option value="90">{{ t('Vertical Dir (90º)') }}</option>
-                        <option value="180">{{ t('Invertido (180º)') }}</option>
-                        <option value="270">{{ t('Vertical Esq (270º)') }}</option>
-                    </select>
-                </div>
-                <div class="form-group"><label>{{ t('Colunas da grade:') }}</label><input type="number" id="grid_columns" class="form-control"></div>
-                <div class="form-group"><label>{{ t('Linhas da grade:') }}</label><input type="number" id="grid_lines" class="form-control"></div>
-                <div class="form-group"><label>{{ t('Tamanho da imagem (px):') }}</label><input type="number" id="image_size" class="form-control"></div>
-                <div class="form-group"><label>{{ t('Máximo de imagens armazenadas:') }}</label><input type="number" id="max_images" class="form-control"></div>
-                <div class="form-group"><label>{{ t('Intervalo de atualização (seg):') }}</label><input type="number" id="refresh_interval" class="form-control"></div>
-                <div class="form-group"><label>{{ t('Percentagem de Zoom (duplo clique):') }}</label><input type="number" id="zoom_percentage" class="form-control"></div>
-                <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> {{ t('Gravar Configuração do Mosaico') }}</button>
-            </form>
-        </div>
-    </div>
-    
-    <div id="users" class="tab-content">
-        <div class="grid-2-col">
-            <div class="section">
-                <h3><i class="fas fa-user-plus"></i> {{ t('Criar Novo Utilizador') }}</h3>
-                <form id="createUserForm">
-                    <div class="form-group"><label>{{ t('Nome de Utilizador') }}</label><input type="text" id="new_username" name="new_username" class="form-control" required></div>
-                    <div class="form-group"><label>{{ t('Password') }}</label><input type="password" id="new_password" name="new_password" class="form-control" required></div>
-                    <div class="form-group"><label>{{ t('Confirmar Password') }}</label><input type="password" id="confirm_password" name="confirm_password" class="form-control" required></div>
-                    <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i> {{ t('Criar Utilizador') }}</button>
-                </form>
-            </div>
-            <div class="section">
-                <h3><i class="fas fa-key"></i> {{ t('Alterar a Minha Password') }}</h3>
-                <form id="changePasswordForm">
-                    {% if not session.is_dev %}
-                    <div class="form-group"><label>{{ t('Password Atual') }}</label><input type="password" id="current_password" name="current_password" class="form-control" required></div>
-                    {% endif %}
-                    <div class="form-group"><label>{{ t('Nova Password') }}</label><input type="password" id="change_new_password" name="new_password" class="form-control" required></div>
-                    <div class="form-group"><label>{{ t('Confirmar Nova Password') }}</label><input type="password" id="change_confirm_password" name="confirm_password" class="form-control" required></div>
-                    <button type="submit" class="btn btn-warning"><i class="fas fa-save"></i> {{ t('Alterar Password') }}</button>
-                </form>
-            </div>
-        </div>
-        <div class="section">
-            <h3><i class="fas fa-users-cog"></i> {{ t('Gerir Utilizadores') }}</h3>
-            <table class="user-table">
-                <thead><tr><th>{{ t('Utilizador') }}</th><th>{{ t('Tipo') }}</th><th>{{ t('Ações') }}</th></tr></thead>
-                <tbody id="user-list-body"></tbody>
-            </table>
-        </div>
-    </div>
-
-    <div id="logs" class="tab-content">
-        <div class="section">
-            <h3><i class="fas fa-file-alt"></i> {{ t('Logs do Sistema') }}</h3>
-            <div style="margin-bottom: 1rem;">
-                <button class="btn btn-info" onclick="refreshCurrentLog()"><i class="fas fa-sync"></i> {{ t('Atualizar Log Atual') }}</button>
-                <button class="btn btn-warning" onclick="clearCurrentLog()"><i class="fas fa-trash"></i> {{ t('Limpar Log Atual') }}</button>
-                <button class="btn btn-primary" onclick="downloadCurrentLog()"><i class="fas fa-download"></i> {{ t('Download Log Atual') }}</button>
-            </div>
-            
-            <div id="log-tabs-container" class="log-tabs">
-                </div>
-            
-            <div id="logs-content" class="log-content-area">{{ t('Carregando logs...') }}</div>
-        </div>
-    </div>
-</div>
-
-<div id="fileBrowserModal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3><i class="fas fa-folder-open"></i> {{ t('Navegador de Arquivos') }}</h3>
-            <button class="close" onclick="closeFileBrowser()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="current-path" id="currentPath">/</div>
-            <ul class="file-list" id="fileList"><li>{{ t('Carregando...') }}</li></ul>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-primary" onclick="selectCurrentPath()"><i class="fas fa-check"></i> {{ t('Selecionar') }}</button>
-            <button class="btn btn-secondary" onclick="closeFileBrowser()"><i class="fas fa-times"></i> {{ t('Cancelar') }}</button>
-        </div>
-    </div>
-</div>
-
-<script>
-    const IS_DEV = {{ session.is_dev | tojson }};
-    let currentInputId = '';
-    let currentPath = '/';
-    let mosaicConfig = {};
-    let aaInterval = null;
-    let currentLogFile = 'backup_server.log';
-
-    function showTab(tabName) {
-        document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        const tabContent = document.getElementById(tabName);
-        if (tabContent) tabContent.classList.add('active');
-        const clickedTab = document.querySelector(`.tab[onclick="showTab('${tabName}')"]`);
-        if (clickedTab) clickedTab.classList.add('active');
-
-        if (tabName === 'configuracao') { setTimeout(checkAllPaths, 500); setTimeout(updateAllServiceStatus, 1000); pollArticleAnalysis(); }
-        else if (tabName === 'servicos') { loadServiceStatusAndCounters(); }
-        else if (tabName === 'diagnostics') { loadDiagnostics(); }
-        else if (tabName === 'logs') { loadLogFiles(); }
-        else if (tabName === 'exportar') { loadMachinesList(); }
-        else if (tabName === 'config_mosaico') { loadMosaicConfig(); }
-        else if (tabName === 'gestao_mosaico') { loadMosaicStatus(); }
-        else if (tabName === 'users') { loadUserList(); }
-    }
-
-    function loadConfigurationsFromServer() {
-        fetch('/get_config').then(response => response.json()).then(config => { populateAllFormFields(config); }).catch(error => { showAlert('{{ t("Erro ao carregar configurações.") }}', 'danger'); });
-    }
-
-    function populateAllFormFields(config) {
-        try {
-            const generalFields = ['ssd_path', 'mirror_source_path', 'mosaic_source_path', 'mosaic_config_folder', 'log_file_path', 'ssd_retention_days', 'hdd_retention_months', 'scan_interval_sec', 'article_analysis_path'];
-            generalFields.forEach(fieldName => {
-                const field = document.getElementById(fieldName) || document.querySelector(`[name="${fieldName}"]`);
-                if (field && config[fieldName] !== undefined) field.value = config[fieldName];
-            });
-
-            const mirrorCheckbox = document.getElementById('mirror_include_subfolders');
-            if (mirrorCheckbox) mirrorCheckbox.checked = config.mirror_include_subfolders !== false;
-
-            if (config.pkiris_retention_days !== undefined) document.getElementById('pkiris_retention_days').value = config.pkiris_retention_days;
-            if (config.pkiris_dst_root !== undefined) document.getElementById('pkiris_dst_root').value = config.pkiris_dst_root;
-
-            if (config.historicos_retention_days !== undefined) document.getElementById('historicos_retention_days').value = config.historicos_retention_days;
-            if (config.historicos_dst_root !== undefined) document.getElementById('historicos_dst_root').value = config.historicos_dst_root;
-
-            if (config.artigos_retention_days !== undefined) document.getElementById('artigos_retention_days').value = config.artigos_retention_days;
-            if (config.artigos_dst_root !== undefined) document.getElementById('artigos_dst_root').value = config.artigos_dst_root;
-
-            if (config.turnos) {
-                Object.keys(config.turnos).forEach(turno => {
-                    const inicioField = document.querySelector(`[name="${turno}_inicio"]`);
-                    const fimField = document.querySelector(`[name="${turno}_fim"]`);
-                    if (inicioField && config.turnos[turno].inicio) inicioField.value = config.turnos[turno].inicio;
-                    if (fimField && config.turnos[turno].fim) fimField.value = config.turnos[turno].fim;
-                });
-            }
-
-            if (config.visao_global) {
-                const vgPortLat = document.getElementById('overview_port_lateral');
-                const vgPortFun = document.getElementById('overview_port_fundo');
-                const vgCycle = document.getElementById('overview_cycle_mode_active');
-                const vgTime = document.getElementById('overview_cycle_time_sec');
-                if (vgPortLat) vgPortLat.value = config.visao_global.port_lateral || 5098;
-                if (vgPortFun) vgPortFun.value = config.visao_global.port_fundo || 5099;
-                if (vgCycle) vgCycle.checked = config.visao_global.cycle_mode_active;
-                if (vgTime) vgTime.value = config.visao_global.cycle_time_sec;
-            }
-
-            if (config.linhas) {
-                Object.keys(config.linhas).forEach(linha => {
-                    const linhaConfig = config.linhas[linha];
-                    
-                    const cycleModeInput = document.getElementById(`cycle_mode_active_${linha}`);
-                    if(cycleModeInput && linhaConfig.cycle_mode_active !== undefined) cycleModeInput.checked = linhaConfig.cycle_mode_active;
-                    
-                    const cycleTimeInput = document.getElementById(`cycle_time_sec_${linha}`);
-                    if(cycleTimeInput && linhaConfig.cycle_time_sec !== undefined) cycleTimeInput.value = linhaConfig.cycle_time_sec;
-                    
-                    const testModeInput = document.getElementById(`use_test_mode_${linha}`);
-                    if(testModeInput && linhaConfig.use_test_mode !== undefined) testModeInput.checked = linhaConfig.use_test_mode;
-
-                    Object.keys(linhaConfig).forEach(maquina => {
-                        if (typeof linhaConfig[maquina] !== 'object' || linhaConfig[maquina] === null) return;
-                        const maquinaConfig = linhaConfig[maquina];
-                        
-                        const origemProdField = document.getElementById(`origem_prod_${linha}_${maquina}`);
-                        const destinoProdField = document.getElementById(`destino_prod_${linha}_${maquina}`);
-                        const origemTestField = document.getElementById(`origem_test_${linha}_${maquina}`);
-                        const destinoTestField = document.getElementById(`destino_test_${linha}_${maquina}`);
-                        
-                        const portInput = document.getElementById(`mosaic_port_${linha}_${maquina}`);
-                        const deleteSourceField = document.getElementById(`delete_source_${linha}_${maquina}`);
-                        
-                        const pkirisSrcField = document.getElementById(`pkiris_src_${linha}_${maquina}`);
-                        const historicoSrcField = document.getElementById(`historico_src_${linha}_${maquina}`);
-                        const artigoSrcField = document.getElementById(`artigo_src_${linha}_${maquina}`);
-
-                        if (origemProdField) origemProdField.value = maquinaConfig.src_prod || maquinaConfig.src || '';
-                        if (destinoProdField) destinoProdField.value = maquinaConfig.dst_prod || maquinaConfig.dst || '';
-                        if (origemTestField) origemTestField.value = maquinaConfig.src_test || '';
-                        if (destinoTestField) destinoTestField.value = maquinaConfig.dst_test || '';
-                        
-                        if (deleteSourceField) deleteSourceField.checked = maquinaConfig.delete_source !== false;
-                        if (portInput && maquinaConfig.mosaic_port) portInput.value = maquinaConfig.mosaic_port;
-                        
-                        if (pkirisSrcField && maquinaConfig.pkiris_src !== undefined) pkirisSrcField.value = maquinaConfig.pkiris_src;
-                        if (historicoSrcField && maquinaConfig.historico_src !== undefined) historicoSrcField.value = maquinaConfig.historico_src;
-                        if (artigoSrcField && maquinaConfig.artigo_src !== undefined) artigoSrcField.value = maquinaConfig.artigo_src;
-                    });
-                });
-            }
-        } catch (error) {}
-    }
-    
-    function loadMosaicConfig() {
-        const linhaSelect = document.getElementById('mosaic_line_selector');
-        const linha = linhaSelect ? linhaSelect.value : 'global';
-        fetch('/api/mosaic_config?linha=' + linha).then(response => response.json()).then(config => {
-            mosaicConfig = config;
-            if (linha === 'overview_lateral' || linha === 'overview_fundo') {
-                document.getElementById('normal_mosaic_config').style.display = 'none';
-                document.getElementById('overview_mosaic_config').style.display = 'block';
-                document.getElementById('overview_orientation').value = mosaicConfig.orientation || 0;
-                document.getElementById('overview_layout').value = mosaicConfig.layout || 'horizontal';
-                document.getElementById('overview_max_images').value = mosaicConfig.max_images || 8;
-                renderOverviewMachines(mosaicConfig.active_machines || {}, mosaicConfig.all_available_machines || {});
-            } else {
-                document.getElementById('normal_mosaic_config').style.display = 'block';
-                document.getElementById('overview_mosaic_config').style.display = 'none';
-                document.getElementById('normal_orientation').value = mosaicConfig.display_config?.orientation || 0;
-                document.getElementById('grid_columns').value = mosaicConfig.display_config?.grid_columns || '';
-                document.getElementById('grid_lines').value = mosaicConfig.display_config?.grid_lines || '';
-                document.getElementById('image_size').value = mosaicConfig.display_config?.image_size || '';
-                document.getElementById('max_images').value = mosaicConfig.display_config?.max_images || '';
-                document.getElementById('refresh_interval').value = mosaicConfig.display_config?.refresh_interval || '';
-                document.getElementById('zoom_percentage').value = mosaicConfig.display_config?.zoom_percentage || 250;
-
-                const availableFields = mosaicConfig.xml_config?.available_xml_fields || [];
-                if (availableFields.length > 0) renderXmlFields(availableFields);
-                else document.getElementById('xmlFieldsCheckboxes').innerHTML = `<p>{{ t('Pressione "Analisar Campos XML" para listar os campos disponíveis.') }}</p>`;
-
-                const filterConfig = mosaicConfig.filter_config?.NUM_CAM || {};
-                const numCamContainer = document.getElementById('numCamFilterCheckboxes');
-                numCamContainer.innerHTML = '';
-                if (filterConfig.available_values && filterConfig.available_values.length > 0) {
-                    filterConfig.available_values.forEach(val => {
-                        const isChecked = filterConfig.selected_values?.includes(val) ? 'checked' : '';
-                        numCamContainer.innerHTML += `<div class="checkbox-item"><input type="checkbox" name="num_cam_filter" value="${val}" id="filter_cam_${val}" ${isChecked}><label for="filter_cam_${val}">{{ t('Câmara') }} ${val}</label></div>`;
-                    });
-                } else {
-                    numCamContainer.innerHTML = `<p>{{ t('Nenhum filtro de câmera salvo. Pressione o botão para analisar.') }}</p>`;
-                }
-            }
-        }).catch(error => { showAlert('{{ t("Erro ao carregar configurações do mosaico.") }}', 'danger'); });
-    }
-
-    function renderOverviewMachines(activeMachines, allMachines) {
-        const container = document.getElementById('overview_machines_list');
-        container.innerHTML = '';
-        for (const [l, maquinas] of Object.entries(allMachines)) {
-            maquinas.forEach(maq => {
-                const isChecked = (activeMachines[l] && activeMachines[l].includes(maq)) ? 'checked' : '';
-                container.innerHTML += `<div class="checkbox-item" style="width:200px; display:inline-block; margin-right: 10px;"><input type="checkbox" name="ov_machine" value="${l}|${maq}" id="ov_${l}_${maq}" ${isChecked}><label for="ov_${l}_${maq}">{{ t('Linha') }} ${l} - ${maq}</label></div>`;
-            });
-        }
-    }
-
-    function saveOverviewConfig() {
-        const linhaSelect = document.getElementById('mosaic_line_selector').value; 
-        const orientation = parseInt(document.getElementById('overview_orientation').value) || 0;
-        const layout = document.getElementById('overview_layout').value || 'horizontal';
-        const maxImages = parseInt(document.getElementById('overview_max_images').value) || 8;
-        const activeMachines = {};
-        document.querySelectorAll('input[name="ov_machine"]:checked').forEach(cb => {
-            const parts = cb.value.split('|');
-            if (!activeMachines[parts[0]]) activeMachines[parts[0]] = [];
-            activeMachines[parts[0]].push(parts[1]);
-        });
-        fetch('/save_mosaic_config?linha=' + linhaSelect, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ orientation: orientation, layout: layout, max_images: maxImages, active_machines: activeMachines })
-        }).then(r => r.json()).then(r => showAlert(r.message, r.status === 'success' ? 'success' : 'danger'));
-    }
-
-    function renderXmlFields(fields) {
-        const container = document.getElementById('xmlFieldsCheckboxes');
-        container.innerHTML = '';
-        if (fields.length === 0) {
-            container.innerHTML = `<p style="color: #e74c3c;"><b>Indisponível:</b> Nenhum arquivo XML encontrado ou nenhum campo salvo.</p>`;
-        } else {
-             container.innerHTML = `<div class="checkbox-item-alias" style="font-weight: bold;"><span></span><label>Nome do Campo (Original)</label><label>Nome para Exibição (Alias)</label></div>`;
-            fields.forEach(field => {
-                const savedAlias = mosaicConfig.xml_config?.selectedFields?.[field] || '';
-                const isChecked = mosaicConfig.xml_config?.selectedFields?.hasOwnProperty(field) ? 'checked' : '';
-                container.innerHTML += `<div class="checkbox-item-alias"><input type="checkbox" name="xml_fields" value="${field}" id="field_${field}" ${isChecked} onchange="updateOverlayDropdowns()"><label for="field_${field}">${field}</label><input type="text" class="form-control" name="alias_${field}" value="${savedAlias}" placeholder="(padrão: ${field})"></div>`;
-            });
-        }
-        updateOverlayDropdowns();
-    }
-
-    function analyzeXmlFields() {
-        const analyzeBtn = document.getElementById('analyzeXmlBtn');
-        analyzeBtn.innerHTML = '<i class="fas fa-sync fa-spin"></i> {{ t("Analisando...") }}';
-        analyzeBtn.disabled = true;
-        const pathElem = document.getElementById('mosaic_source_path');
-        const path = pathElem ? pathElem.value : '';
-        fetch('/analyze_xml_fields', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: path })
-        }).then(response => response.json()).then(fields => {
-            if (!mosaicConfig.xml_config) mosaicConfig.xml_config = {};
-            mosaicConfig.xml_config.available_xml_fields = fields;
-            renderXmlFields(fields);
-            analyzeBtn.innerHTML = '<i class="fas fa-search"></i> {{ t("Re-Analisar Campos XML") }}';
-            analyzeBtn.disabled = false;
-            showAlert('{{ t("Análise de campos XML concluída!") }}', 'success');
-        }).catch(error => {
-            document.getElementById('xmlFieldsCheckboxes').innerHTML = `<p style="color:red;">{{ t("Erro ao analisar.") }}</p>`;
-            analyzeBtn.innerHTML = '<i class="fas fa-search"></i> {{ t("Re-Analisar Campos XML") }}';
-            analyzeBtn.disabled = false;
-        });
-    }
-
-    function analyzeNumCamValues() {
-        const analyzeBtn = document.getElementById('analyzeNumCamBtn');
-        analyzeBtn.innerHTML = '<i class="fas fa-sync fa-spin"></i> {{ t("Analisando...") }}';
-        analyzeBtn.disabled = true;
-        const pathElem = document.getElementById('mosaic_source_path');
-        const path = pathElem ? pathElem.value : '';
-        fetch('/api/get_xml_tag_values', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ path: path, tag: 'NUM_CAM' })
-        }).then(response => response.json()).then(data => {
-            const container = document.getElementById('numCamFilterCheckboxes');
-            container.innerHTML = '';
-            if (data.values && data.values.length > 0) {
-                 data.values.forEach(val => {
-                    const isChecked = mosaicConfig.filter_config?.NUM_CAM?.selected_values?.includes(val) ? 'checked' : 'checked';
-                    container.innerHTML += `<div class="checkbox-item"><input type="checkbox" name="num_cam_filter" value="${val}" id="filter_cam_${val}" ${isChecked}><label for="filter_cam_${val}">{{ t('Câmara') }} ${val}</label></div>`;
-                });
-            } else {
-                container.innerHTML = `<p style="color: #e74c3c;"><b>Indisponível:</b> Nenhum valor para 'NUM_CAM' encontrado.</p>`;
-            }
-            analyzeBtn.innerHTML = '<i class="fas fa-camera"></i> {{ t("Analisar Câmeras (NUM_CAM)") }}';
-            analyzeBtn.disabled = false;
-        }).catch(error => {
-            document.getElementById('numCamFilterCheckboxes').innerHTML = `<p style="color:red;">{{ t("Erro ao analisar.") }}</p>`;
-            analyzeBtn.innerHTML = '<i class="fas fa-camera"></i> {{ t("Analisar Câmeras (NUM_CAM)") }}';
-            analyzeBtn.disabled = false;
-        });
-    }
-
-    function updateOverlayDropdowns() {
-        const selectedFields = Array.from(document.querySelectorAll('input[name="xml_fields"]:checked')).map(el => el.value);
-        const overlayDropdowns = ['overlay_top', 'overlay_bottom_left', 'overlay_bottom_right'];
-        overlayDropdowns.forEach(dropdownId => {
-            const select = document.getElementById(dropdownId);
-            const currentVal = mosaicConfig.overlay_config?.[dropdownId.replace('overlay_', '')] || '';
-            select.innerHTML = '<option value="">-- {{ t("Nenhum") }} --</option>';
-            if (dropdownId === 'overlay_bottom_right') {
-                const isSelected = (currentVal === '_file_timestamp_') ? 'selected' : '';
-                select.innerHTML += `<option value="_file_timestamp_" ${isSelected}>{{ t("Timestamp do Arquivo (HH:MM)") }}</option>`;
-            }
-            selectedFields.forEach(field => {
-                const isSelected = (field === currentVal) ? 'selected' : '';
-                select.innerHTML += `<option value="${field}" ${isSelected}>${field}</option>`;
-            });
-        });
-    }
-
-    document.getElementById('normal_mosaic_config').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const selectedFieldsWithAliases = {};
-        
-        document.querySelectorAll('input[name="xml_fields"]:checked').forEach(el => {
-            const fieldName = el.value;
-            const aliasInput = document.querySelector(`input[name="alias_${fieldName}"]`);
-            selectedFieldsWithAliases[fieldName] = aliasInput && aliasInput.value.trim() ? aliasInput.value.trim() : fieldName;
-        });
-        
-        const selectedNumCamFilters = Array.from(document.querySelectorAll('input[name="num_cam_filter"]:checked')).map(el => el.value);
-        const availableNumCamFilters = Array.from(document.querySelectorAll('input[name="num_cam_filter"]')).map(el => el.value);
-        
-        const configData = {
-            xml_config: { available_xml_fields: mosaicConfig.xml_config?.available_xml_fields || [], selectedFields: selectedFieldsWithAliases },
-            display_config: {
-                orientation: parseInt(document.getElementById('normal_orientation').value) || 0,
-                grid_columns: parseInt(document.getElementById('grid_columns').value) || 4,
-                grid_lines: parseInt(document.getElementById('grid_lines').value) || 3,
-                image_size: parseInt(document.getElementById('image_size').value) || 300,
-                max_images: parseInt(document.getElementById('max_images').value) || 50,
-                refresh_interval: parseInt(document.getElementById('refresh_interval').value) || 30,
-                zoom_percentage: parseInt(document.getElementById('zoom_percentage').value) || 250
-            },
-            overlay_config: { top: document.getElementById('overlay_top').value, bottom_left: document.getElementById('overlay_bottom_left').value, bottom_right: document.getElementById('overlay_bottom_right').value },
-            filter_config: { NUM_CAM: { enabled: true, available_values: availableNumCamFilters, selected_values: selectedNumCamFilters } }
-        };
-        const linhaSelect = document.getElementById('mosaic_line_selector');
-        const linha = linhaSelect ? linhaSelect.value : 'global';
-        
-        fetch('/save_mosaic_config?linha=' + linha, {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(configData)
-        }).then(response => response.json()).then(res => { showAlert(res.message, res.status === 'success' ? 'success' : 'danger'); }).catch(error => { showAlert('{{ t("Erro de comunicação.") }}', 'danger'); });
-    });
-    
-    document.getElementById('pkirisConfigForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const data = {
-            pkiris_retention_days: document.getElementById('pkiris_retention_days').value,
-            pkiris_dst_root: document.getElementById('pkiris_dst_root').value,
-            linhas: {}
-        };
-        
-        document.querySelectorAll('input[id^="pkiris_src_"]').forEach(input => {
-            const parts = input.id.split('_');
-            if(parts.length >= 4) {
-                const linha = parts[2];
-                const maquina = parts[3];
-                if (!data.linhas[linha]) data.linhas[linha] = {};
-                data.linhas[linha][maquina] = input.value;
-            }
-        });
-        
-        fetch('/save_pkiris_config', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
-        }).then(res => res.json()).then(res => {
-            showAlert(res.message, res.status === 'success' ? 'success' : 'danger');
-        });
-    });
-
-    document.getElementById('historicosConfigForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const data = {
-            historicos_retention_days: document.getElementById('historicos_retention_days').value,
-            historicos_dst_root: document.getElementById('historicos_dst_root').value,
-            linhas: {}
-        };
-        
-        document.querySelectorAll('input[id^="historico_src_"]').forEach(input => {
-            const parts = input.id.split('_');
-            if(parts.length >= 4) {
-                const linha = parts[2];
-                const maquina = parts[3];
-                if (!data.linhas[linha]) data.linhas[linha] = {};
-                data.linhas[linha][maquina] = input.value;
-            }
-        });
-        
-        fetch('/save_historicos_config', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
-        }).then(res => res.json()).then(res => {
-            showAlert(res.message, res.status === 'success' ? 'success' : 'danger');
-        });
-    });
-
-    document.getElementById('artigosConfigForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const data = {
-            artigos_retention_days: document.getElementById('artigos_retention_days').value,
-            artigos_dst_root: document.getElementById('artigos_dst_root').value,
-            linhas: {}
-        };
-        
-        document.querySelectorAll('input[id^="artigo_src_"]').forEach(input => {
-            const parts = input.id.split('_');
-            if(parts.length >= 4) {
-                const linha = parts[2];
-                const maquina = parts[3];
-                if (!data.linhas[linha]) data.linhas[linha] = {};
-                data.linhas[linha][maquina] = input.value;
-            }
-        });
-        
-        fetch('/save_artigos_config', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
-        }).then(res => res.json()).then(res => {
-            showAlert(res.message, res.status === 'success' ? 'success' : 'danger');
-        });
-    });
-
-    function startPkirisBackup() {
-        fetch('/start_pkiris', {method: 'POST'}).then(r => r.json()).then(d => {
-            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
-            if (d.status === 'success') updateServiceLED('service_pkiris', true);
-        });
-    }
-    function stopPkirisBackup() {
-        fetch('/stop_pkiris', {method: 'POST'}).then(r => r.json()).then(d => {
-            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
-            if (d.status === 'success') updateServiceLED('service_pkiris', false);
-        });
-    }
-
-    function startHistoricosBackup() {
-        fetch('/start_historicos', {method: 'POST'}).then(r => r.json()).then(d => {
-            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
-            if (d.status === 'success') updateServiceLED('service_historicos', true);
-        });
-    }
-    function stopHistoricosBackup() {
-        fetch('/stop_historicos', {method: 'POST'}).then(r => r.json()).then(d => {
-            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
-            if (d.status === 'success') updateServiceLED('service_historicos', false);
-        });
-    }
-
-    function startArtigosBackup() {
-        fetch('/start_artigos', {method: 'POST'}).then(r => r.json()).then(d => {
-            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
-            if (d.status === 'success') updateServiceLED('service_artigos', true);
-        });
-    }
-    function stopArtigosBackup() {
-        fetch('/stop_artigos', {method: 'POST'}).then(r => r.json()).then(d => {
-            showAlert(d.message, d.status === 'success' ? 'success' : 'danger');
-            if (d.status === 'success') updateServiceLED('service_artigos', false);
-        });
-    }
-
-    function openFileBrowser(inputId) {
-        currentInputId = inputId;
-        const currentValue = document.getElementById(inputId).value;
-        currentPath = currentValue || '/';
-        document.getElementById('fileBrowserModal').style.display = 'block';
-        loadDirectoryContents(currentPath);
-    }
-
-    function closeFileBrowser() {
-        document.getElementById('fileBrowserModal').style.display = 'none';
-        currentInputId = '';
-    }
-
-    function loadDirectoryContents(path) {
-        document.getElementById('currentPath').textContent = path;
-        document.getElementById('fileList').innerHTML = '<li>{{ t("Carregando...") }}</li>';
-        fetch('/browse_directory', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: path})
-        }).then(response => response.json()).then(data => {
-            if (data.success) {
-                if (data.current_path) { currentPath = data.current_path; document.getElementById('currentPath').textContent = currentPath; }
-                displayDirectoryContents(data.contents, currentPath);
-            } else { document.getElementById('fileList').innerHTML = `<li style="color: red;">{{ t("Erro:") }} ${data.error}</li>`; }
-        }).catch(error => { document.getElementById('fileList').innerHTML = `<li style="color: red;">{{ t("Erro de comunicação.") }}</li>`; });
-    }
-
-    function displayDirectoryContents(contents, path) {
-        const fileList = document.getElementById('fileList');
-        fileList.innerHTML = '';
-        
-        if (path !== '/' && path !== '' && !(path.length === 3 && path.charAt(1) === ':')) {
-            let parentPath = path.substring(0, path.lastIndexOf('/'));
-            if (!parentPath) parentPath = '/';
-            if (parentPath.endsWith(':')) parentPath += '/';
-            const parentItem = document.createElement('li');
-            parentItem.className = 'file-item parent';
-            parentItem.innerHTML = '<i class="fas fa-arrow-up"></i> .. {{ t("(Pasta Pai)") }}';
-            parentItem.onclick = () => { currentPath = parentPath; loadDirectoryContents(parentPath); };
-            fileList.appendChild(parentItem);
-        }
-        
-        contents.directories.forEach(dir => {
-            const item = document.createElement('li');
-            item.className = 'file-item folder';
-            item.innerHTML = `<i class="fas fa-folder"></i> ${dir}`;
-            item.onclick = () => { currentPath = path.endsWith('/') ? `${path}${dir}` : `${path}/${dir}`; loadDirectoryContents(currentPath); };
-            fileList.appendChild(item);
-        });
-        
-        contents.files.forEach(file => {
-            const item = document.createElement('li');
-            item.className = 'file-item';
-            item.innerHTML = `<i class="fas fa-file"></i> ${file}`;
-            item.style.opacity = '0.6';
-            fileList.appendChild(item);
-        });
-        
-        if (contents.directories.length === 0 && contents.files.length === 0) {
-            const item = document.createElement('li');
-            item.innerHTML = '<i>{{ t("Pasta vazia") }}</i>';
-            item.style.fontStyle = 'italic';
-            item.style.color = '#999';
-            fileList.appendChild(item);
-        }
-    }
-
-    function selectCurrentPath() {
-        if (currentInputId) {
-            document.getElementById(currentInputId).value = currentPath;
-            checkPathAccess(currentInputId);
-            closeFileBrowser();
-        }
-    }
-
-    function checkPathAccess(inputId) {
-        const ledId = 'led_' + inputId;
-        const pathElem = document.getElementById(inputId);
-        const path = pathElem ? pathElem.value : '';
-        const led = document.getElementById(ledId);
-        if (!path || path.trim() === '') { if(led) led.className = 'status-led'; return; }
-        if(led) led.className = 'status-led checking';
-        fetch('/check_path_access', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: path})
-        }).then(response => response.json()).then(data => {
-            if (data.accessible) { if(led) { led.className = 'status-led online'; led.title = '{{ t("Caminho acessível") }}'; } } 
-            else { if(led) { led.className = 'status-led'; led.title = `{{ t("Não acessível") }}`; } }
-        }).catch(error => { if(led) { led.className = 'status-led'; led.title = '{{ t("Erro ao verificar") }}'; } });
-    }
-
-    function checkAllPaths() {
-        const pathInputs = document.querySelectorAll('input[type="text"]');
-        pathInputs.forEach(input => { if (input.value && input.value.trim() !== '' && input.id) checkPathAccess(input.id); });
-    }
-
-    function updateServiceLED(ledId, isActive) {
-        const led = document.getElementById(ledId);
-        if (led) led.className = isActive ? 'service-led active' : 'service-led inactive';
-    }
-
-    function updateAllServiceStatus() {
-        fetch('/service_status').then(response => response.json()).then(data => {
-            for (const [key, active] of Object.entries(data.backup_services || {})) updateServiceLED(`service_backup_${key}`, active);
-            for (const [key, status] of Object.entries(data.mosaic_process_status || {})) updateServiceLED(`service_mosaic_${key}`, status.running);
-            updateServiceLED('service_file_copying', data.file_copying_active || false);
-            updateServiceLED('service_mirror_ssd', data.mirror_ssd_active || false);
-            updateServiceLED('service_pkiris', data.pkiris_active || false);
-            updateServiceLED('service_historicos', data.historicos_active || false);
-            updateServiceLED('service_artigos', data.artigos_active || false);
-        }).catch(error => {});
-    }
-
-    function loadServiceStatusAndCounters() {
-        fetch('/get_line_status').then(response => response.json()).then(data => {
-            const tableBody = document.getElementById('service-status-table-body');
-            tableBody.innerHTML = '';
-            data.lines.forEach(line => {
-                const row = document.createElement('tr');
-                const k = line.key;
-                
-                const backupStatus = data.backup_services[k] ? 'active' : 'inactive';
-                const mosaicStatus = data.mosaic_services[k] ? 'active' : 'inactive';
-                
-                const p_info = data.pkiris_info[k];
-                const p_status = p_info && p_info.active ? 'active' : 'inactive';
-                
-                const h_info = data.historicos_info[k];
-                const h_status = h_info && h_info.active ? 'active' : 'inactive';
-                
-                const a_info = data.artigos_info[k];
-                const a_status = a_info && a_info.active ? 'active' : 'inactive';
-                
-                const shift_jpg = data.shift_counters[k]?.jpg || 0;
-                const shift_xml = data.shift_counters[k]?.xml || 0;
-                const day_jpg = data.day_counters[k]?.jpg || 0;
-                const day_xml = data.day_counters[k]?.xml || 0;
-                
-                let imgCell = `<span class="service-led ${backupStatus}"></span> <span style="margin-left: 5px;">T: ${shift_jpg}/${shift_xml} | D: ${day_jpg}/${day_xml}</span>`;
-                let mosCell = `<span class="service-led ${mosaicStatus}"></span>`;
-                let pkirisCell = `<span class="service-led ${p_status}"></span> <span style="margin-left: 5px;">Ult: ${p_info ? p_info.last : 'N/A'} (Qtd: ${p_info ? p_info.count : 0})</span>`;
-                let histCell = `<span class="service-led ${h_status}"></span> <span style="margin-left: 5px;">Ult: ${h_info ? h_info.last : 'N/A'}</span>`;
-                let artCell = `<span class="service-led ${a_status}"></span> <span style="margin-left: 5px;">Ult: ${a_info ? a_info.last : 'N/A'}</span>`;
-                
-                row.innerHTML = `
-                    <td><strong>${line.linha}</strong></td>
-                    <td>${line.maquina_display}</td>
-                    <td>${imgCell}</td>
-                    <td style="text-align: center;">${mosCell}</td>
-                    <td>${pkirisCell}</td>
-                    <td>${histCell}</td>
-                    <td>${artCell}</td>
-                `;
-                tableBody.appendChild(row);
-            });
-        }).catch(error => { console.error("Error loading service status:", error); });
-    }
-    
-    function loadMosaicStatus() {
-        const tableBody = document.getElementById('mosaic-status-table-body');
-        tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;">{{ t("Carregando status...") }}</td></tr>';
-        fetch('/api/mosaic_status').then(response => response.json()).then(data => {
-            tableBody.innerHTML = '';
-            if (Object.keys(data.mosaics).length === 0) { tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;">{{ t("Nenhuma máquina configurada.") }}</td></tr>'; return; }
-            for (const key in data.mosaics) {
-                const status = data.mosaics[key];
-                const row = document.createElement('tr');
-                const configStatus = status.is_configured ? '<span class="status-indicator status-running">{{ t("Ativo") }}</span>' : '<span class="status-indicator status-stopped">{{ t("Inativo") }}</span>';
-                const processStatus = status.is_running ? '<span class="status-indicator status-running">{{ t("Executando") }}</span>' : '<span class="status-indicator status-stopped">{{ t("Parado") }}</span>';
-                
-                const url = status.port ? `<a href="http://${window.location.hostname}:${status.port}" target="_blank" style="color: #3498db; font-weight: bold; text-decoration: underline;">{{ t("Abrir") }}</a>` : 'N/A';
-                
-                const actions = `
-                    <div class="actions">
-                       <button class="btn btn-sm btn-success" title="{{ t('Iniciar') }}" onclick="controlMosaic('${status.linha}', '${status.maquina}', 'start')" ${status.is_running ? 'disabled' : ''}><i class="fas fa-play"></i></button>
-                       <button class="btn btn-sm btn-danger" title="{{ t('Parar') }}" onclick="controlMosaic('${status.linha}', '${status.maquina}', 'stop')" ${!status.is_running ? 'disabled' : ''}><i class="fas fa-stop"></i></button>
-                       <button class="btn btn-sm btn-warning" title="{{ t('Reiniciar') }}" onclick="controlMosaic('${status.linha}', '${status.maquina}', 'restart')" ${!status.is_running ? 'disabled' : ''}><i class="fas fa-sync"></i></button>
-                    </div>`;
-                row.innerHTML = `<td>${status.linha}</td><td>${status.maquina_display}</td><td>${configStatus}</td><td>${processStatus}</td><td>${status.pid || 'N/A'}</td><td>${status.port || 'N/A'}</td><td>${url}</td><td>${actions}</td>`;
-                tableBody.appendChild(row);
-            }
-        }).catch(error => { tableBody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:red;">{{ t("Erro ao carregar status.") }}</td></tr>`; });
-    }
-
-    function startFileCopying() {
-        fetch('/start_file_copying', {method: 'POST'}).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            if (data.status === 'success') { updateServiceLED('service_file_copying', true); updateCopyStatus(); }
-        });
-    }
-
-    function startMirrorSSD() {
-        fetch('/start_mirror_ssd', {method: 'POST'}).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            if (data.status === 'success') updateServiceLED('service_mirror_ssd', true);
-        });
-    }
-
-    function stopAllServices() {
-        fetch('/stop_all_services', {method: 'POST'}).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            if (data.status === 'success') {
-                document.querySelectorAll('.service-led').forEach(led => { led.className = 'service-led inactive'; });
-                if (document.getElementById('gestao_mosaico').classList.contains('active')) loadMosaicStatus();
-            }
-        });
-    }
-
-    function updateCopyStatus() {
-        fetch('/copy_status').then(response => response.json()).then(data => {
-            const statusDiv = document.getElementById('copy-status');
-            if (data.running) statusDiv.innerHTML = `<p><strong>{{ t("Sistema de cópia ativo") }}</strong></p><p>{{ t("Threads ativos:") }} ${data.active_threads}</p>`;
-            else statusDiv.innerHTML = '<p>{{ t("Sistema de cópia parado") }}</p>';
-            updateServiceLED('service_file_copying', data.running);
-        });
-    }
-
-    document.getElementById('configGeralForm').addEventListener('submit', function (e) {
-        e.preventDefault();
-        const articlePathElem = document.getElementById('article_analysis_path');
-        const data = {
-            ssd_path: document.getElementById('ssd_path').value,
-            mirror_source_path: document.getElementById('mirror_source_path').value,
-            mosaic_config_folder: document.getElementById('mosaic_config_folder').value,
-            article_analysis_path: articlePathElem ? articlePathElem.value : "",
-            log_file_path: document.getElementById('log_file_path').value,
-            mirror_include_subfolders: document.getElementById('mirror_include_subfolders').checked,
-            ssd_retention_days: document.getElementById('ssd_retention_days').value,
-            hdd_retention_months: document.getElementById('hdd_retention_months').value,
-            scan_interval_sec: document.getElementById('scan_interval_sec').value,
-            turnos: {
-                turno1: { inicio: document.getElementById('turno1_inicio').value, fim: document.getElementById('turno1_fim').value },
-                turno2: { inicio: document.getElementById('turno2_inicio').value, fim: document.getElementById('turno2_fim').value },
-                turno3: { inicio: document.getElementById('turno3_inicio').value, fim: document.getElementById('turno3_fim').value }
-            }
-        };
-        fetch('/save_general_config', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
-        }).then(response => response.json()).then(data => { showAlert(data.message, data.status === 'success' ? 'success' : 'danger'); });
-    });
-
-    function startArticleAnalysis() {
-        const pathElem = document.getElementById('article_analysis_path');
-        const path = pathElem ? pathElem.value : "";
-        fetch('/api/start_article_analysis', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({path: path})
-        }).then(r => r.json()).then(d => {
-            showAlert(d.message, d.status);
-            if (d.status === 'success') {
-                document.getElementById('articleAnalysisProgress').style.display = 'block';
-                pollArticleAnalysis();
-            }
-        });
-    }
-    
-    function resetArticleAnalysis() {
-        if(confirm('{{ t("Isto apagará a cache de análise anterior e lerá tudo novamente. Confirmar?") }}')) {
-            const pathElem = document.getElementById('article_analysis_path');
-            const path = pathElem ? pathElem.value : "";
-            fetch('/api/reset_article_analysis', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({path: path})
-            }).then(r => r.json()).then(d => {
-                showAlert(d.message, d.status);
-                if (d.status === 'success') {
-                    document.getElementById('articleAnalysisProgress').style.display = 'block';
-                    pollArticleAnalysis();
-                }
-            });
-        }
-    }
-    function stopArticleAnalysis() {
-        fetch('/api/stop_article_analysis', {method: 'POST'})
-            .then(r => r.json()).then(d => showAlert(d.message, d.status));
-    }
-    function pollArticleAnalysis() {
-        if (aaInterval) return;
-        document.getElementById('articleAnalysisProgress').style.display = 'block';
-        aaInterval = setInterval(() => {
-            fetch('/api/status_article_analysis').then(r => r.json()).then(data => {
-                document.getElementById('aa_progress_bar').style.width = data.progress + '%';
-                
-                let statusTxt = '';
-                if (data.status === 'idle') {
-                    statusTxt = '{{ t("Pausado") }}';
-                    document.getElementById('aa_progress_text').innerText = '{{ t("A aguardar início...") }}';
-                }
-                else if (data.status === 'scanning_dirs') {
-                    statusTxt = '{{ t("A procurar pastas e ficheiros XML...") }}';
-                    document.getElementById('aa_progress_text').innerText = '{{ t("A preparar...") }}';
-                }
-                else if (data.status === 'counting_files') {
-                    statusTxt = '{{ t("A indexar ficheiros (encontrados: ") }}' + data.total_files + ')...';
-                    document.getElementById('aa_progress_text').innerText = '{{ t("A organizar ") }}' + data.total_files + ' {{ t("ficheiros...") }}';
-                }
-                else if (data.status === 'processing') {
-                    statusTxt = '{{ t("A analisar ficheiros XML (Multi-Thread)...") }}';
-                    document.getElementById('aa_progress_text').innerText = '{{ t("Analisados ") }}' + data.files_done + ' {{ t("ficheiros de um total de ") }}' + data.total_files;
-                }
-                else if (data.status === 'completed') {
-                    statusTxt = '{{ t("Análise Concluída!") }}';
-                    document.getElementById('aa_progress_text').innerText = '{{ t("Análise de ") }}' + data.total_files + ' {{ t("ficheiros concluída!") }}';
-                }
-                else if (data.status === 'interrupted') {
-                    statusTxt = '{{ t("Análise Interrompida.") }}';
-                    document.getElementById('aa_progress_text').innerText = '{{ t("Interrompido nos ") }}' + data.files_done + ' {{ t("de ") }}' + data.total_files + ' {{ t("ficheiros.") }}';
-                }
-                
-                document.getElementById('aa_status_text').innerText = statusTxt;
-                document.getElementById('aa_eta_text').innerText = "{{ t('ETA: ') }}" + data.eta;
-                
-                const logWin = document.getElementById('aa_log_window');
-                if (data.recent_logs && data.recent_logs.length > 0) {
-                    logWin.innerHTML = data.recent_logs.map(l => `<p>${l}</p>`).join('');
-                    logWin.scrollTop = logWin.scrollHeight;
-                }
-                
-                if (data.current_file) {
-                    document.getElementById('aa_current_file').innerText = "{{ t('Atual: ') }}" + data.current_file;
-                }
-                
-                if (!data.running && data.status !== 'scanning_dirs' && data.status !== 'processing' && data.status !== 'counting_files') {
-                    clearInterval(aaInterval);
-                    aaInterval = null;
-                }
-            });
-        }, 1500);
-    }
-
-    function toggleBackup(linha, maquina) {
-        fetch('/toggle_backup', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({linha: linha, maquina: maquina})
-        }).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            if (data.status === 'success') updateServiceLED(`service_backup_${linha}_${maquina}`, data.active);
-        });
-    }
-
-    function toggleMosaico(linha, maquina) {
-        fetch('/toggle_mosaic', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({linha: linha, maquina: maquina})
-        }).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            if (data.status === 'success') {
-                updateServiceLED(`service_mosaic_${linha}_${maquina}`, data.active);
-                if (document.getElementById('gestao_mosaico').classList.contains('active')) setTimeout(loadMosaicStatus, 1000);
-            }
-        });
-    }
-
-    function controlMosaic(linha, maquina, action) {
-        fetch(`/api/mosaic_control/${action}`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({linha: linha, maquina: maquina})
-        }).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            setTimeout(loadMosaicStatus, 500); 
-        });
-    }
-
-    function saveAllConfig() {
-        const config = { linhas: {} };
-        document.querySelectorAll('.linha-card').forEach(card => {
-            const h4 = card.querySelector('h4');
-            const linhaMatch = h4.innerText.match(/Linha ([0-9]+)/);
-            if (!linhaMatch) return;
-            const linha = linhaMatch[1];
-            if (!config.linhas[linha]) config.linhas[linha] = {};
-            
-            const cycleModeInput = document.getElementById(`cycle_mode_active_${linha}`);
-            if (cycleModeInput) config.linhas[linha].cycle_mode_active = cycleModeInput.checked;
-            
-            const cycleTimeInput = document.getElementById(`cycle_time_sec_${linha}`);
-            if (cycleTimeInput) config.linhas[linha].cycle_time_sec = parseInt(cycleTimeInput.value) || 30;
-            
-            const testModeInput = document.getElementById(`use_test_mode_${linha}`);
-            if (testModeInput) config.linhas[linha].use_test_mode = testModeInput.checked;
-
-            card.querySelectorAll('.machine-section').forEach(section => {
-                const header = section.querySelector('h5, h6');
-                if (!header || header.innerHTML.includes('fa-sync-alt')) return; 
-                
-                let maquina = '';
-                const headerText = header.textContent || header.innerText;
-                
-                if (linha !== '34') {
-                    if (headerText.includes('Lateral') || headerText.includes('Lateral'.toUpperCase())) maquina = 'lateral';
-                    else if (headerText.includes('Fundo') || headerText.includes('Fundo'.toUpperCase()) || headerText.includes('Topo e Fundo')) maquina = 'fundo';
-                } else {
-                    const machineMatch = headerText.match(/(lateral|fundo)\s*([0-9])/i);
-                    if (machineMatch) {
-                        maquina = machineMatch[1].toLowerCase() + machineMatch[2];
-                    }
-                }
-                
-                if (!maquina) return;
-                if (!config.linhas[linha][maquina]) config.linhas[linha][maquina] = {};
-                
-                const srcProdInput = document.getElementById(`origem_prod_${linha}_${maquina}`);
-                const dstProdInput = document.getElementById(`destino_prod_${linha}_${maquina}`);
-                const srcTestInput = document.getElementById(`origem_test_${linha}_${maquina}`);
-                const dstTestInput = document.getElementById(`destino_test_${linha}_${maquina}`);
-                
-                const deleteInput = document.getElementById(`delete_source_${linha}_${maquina}`);
-                const portInput = document.getElementById(`mosaic_port_${linha}_${maquina}`);
-
-                if(srcProdInput) config.linhas[linha][maquina].src_prod = srcProdInput.value;
-                if(dstProdInput) config.linhas[linha][maquina].dst_prod = dstProdInput.value;
-                if(srcTestInput) config.linhas[linha][maquina].src_test = srcTestInput.value;
-                if(dstTestInput) config.linhas[linha][maquina].dst_test = dstTestInput.value;
-                
-                if(deleteInput) config.linhas[linha][maquina].delete_source = deleteInput.checked;
-                if(portInput) config.linhas[linha][maquina].mosaic_port = parseInt(portInput.value) || 0;
-            });
-        });
-        
-        const vgPortLat = document.getElementById('overview_port_lateral');
-        const vgPortFun = document.getElementById('overview_port_fundo');
-        const vgCycle = document.getElementById('overview_cycle_mode_active');
-        const vgTime = document.getElementById('overview_cycle_time_sec');
-        const visao_global = {
-            port_lateral: vgPortLat ? (parseInt(vgPortLat.value) || 5098) : 5098,
-            port_fundo: vgPortFun ? (parseInt(vgPortFun.value) || 5099) : 5099,
-            cycle_mode_active: vgCycle ? vgCycle.checked : true,
-            cycle_time_sec: vgTime ? (parseInt(vgTime.value) || 30) : 30
-        };
-        
-        fetch('/save_lines_config', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({linhas: config.linhas, visao_global: visao_global})
-        }).then(response => response.json()).then(data => { showAlert(data.message, data.status === 'success' ? 'success' : 'danger'); });
-    }
-
-    function startAll() {
-        fetch('/start_all', {method: 'POST'}).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            setTimeout(updateAllServiceStatus, 2000);
-        });
-    }
-
-    function stopAll() {
-        fetch('/stop_all', {method: 'POST'}).then(response => response.json()).then(data => {
-            showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            setTimeout(updateAllServiceStatus, 2000);
-        });
-    }
-
-    function loadMachinesList() {
-        fetch('/get_machines_list').then(response => response.json()).then(data => {
-            const machinesList = document.getElementById('machines-list');
-            let html = '';
-            data.machines.forEach(machine => {
-                html += `<div class="toggle-item"><span>{{ t('Linha') }} ${machine.linha} - ${machine.maquina_display}</span><label class="switch"><input type="checkbox" name="machines" value="${machine.key}" id="export_machine_${machine.key}"><span class="slider"></span></label></div>`;
-            });
-            machinesList.innerHTML = html;
-        });
-    }
-
-    document.getElementById('exportForm').addEventListener('submit', function (e) {
-        e.preventDefault();
-        const formData = new FormData(this);
-        const selectedTurnos = Array.from(document.querySelectorAll('input[name="turnos"]:checked')).map(cb => cb.value);
-        const selectedMachines = Array.from(document.querySelectorAll('input[name="machines"]:checked')).map(cb => cb.value);
-        if (selectedTurnos.length === 0 || selectedMachines.length === 0) { showAlert('{{ t("Por favor, selecione pelo menos um turno e uma máquina.") }}', 'warning'); return; }
-        const exportData = { export_date: formData.get('export_date'), turnos: selectedTurnos, machines: selectedMachines, compress: formData.has('compress') };
-        const progressContainer = document.getElementById('exportProgress');
-        const progressBar = document.getElementById('progressBar');
-        const progressText = document.getElementById('progressText');
-        const submitBtn = document.getElementById('btn-export-submit');
-        
-        progressContainer.style.display = 'block';
-        progressBar.style.width = '0%';
-        progressBar.innerText = '0%';
-        progressText.innerHTML = '{{ t("A iniciar compilação...") }}';
-        submitBtn.disabled = true;
-
-        fetch('/api/export_start', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(exportData)
-        }).then(res => res.json()).then(data => {
-            if (data.task_id) checkExportStatus(data.task_id, submitBtn);
-            else throw new Error('{{ t("Erro ao iniciar a tarefa de exportação.") }}');
-        }).catch(error => {
-            showAlert('{{ t("Erro:") }} ' + error.message, 'danger');
-            progressContainer.style.display = 'none';
-            submitBtn.disabled = false;
-        });
-    });
-
-    function checkExportStatus(taskId, submitBtn) {
-        fetch(`/api/export_status/${taskId}`).then(res => res.json()).then(data => {
-            const progressBar = document.getElementById('progressBar');
-            const progressText = document.getElementById('progressText');
-            const progressContainer = document.getElementById('exportProgress');
-            if (data.status === 'processing') {
-                progressBar.style.width = data.progress + '%';
-                progressBar.innerText = data.progress + '%';
-                progressText.innerHTML = `{{ t("A processar imagens...") }}`;
-                setTimeout(() => checkExportStatus(taskId, submitBtn), 1000);
-            } else if (data.status === 'completed') {
-                progressBar.style.width = '100%';
-                progressBar.innerText = '100%';
-                progressText.innerHTML = '{{ t("Concluído! A iniciar transferência...") }}';
-                window.location.href = `/api/export_download/${taskId}`;
-                setTimeout(() => { progressContainer.style.display = 'none'; submitBtn.disabled = false; showAlert('{{ t("Exportação concluída!") }}', 'success'); }, 3000);
-            } else {
-                showAlert(`{{ t("Erro:") }} ${data.message}`, 'danger');
-                progressContainer.style.display = 'none';
-                submitBtn.disabled = false;
-            }
-        }).catch(err => {
-            showAlert('{{ t("Erro de comunicação.") }}', 'danger');
-            document.getElementById('exportProgress').style.display = 'none';
-            submitBtn.disabled = false;
-        });
-    }
-
-    function loadDiagnostics() {
-        fetch('/diagnostics').then(response => response.json()).then(data => {
-            document.getElementById('current-shift').textContent = data.current_shift;
-            document.getElementById('volume1-usage').textContent = data.storage.volume1.percent + '%';
-            document.getElementById('volume2-usage').textContent = data.storage.volume2.percent + '%';
-            document.getElementById('system-load').textContent = data.system.cpu_percent + '%';
-            document.getElementById('memory-usage').textContent = data.system.memory_percent + '%';
-            document.getElementById('files-copied-shift').textContent = `${data.total_shift_jpg} / ${data.total_shift_xml}`;
-            document.getElementById('files-copied-day').textContent = `${data.total_day_jpg} / ${data.total_day_xml}`;
-            let servicesHtml = '';
-            for (const [service, status] of Object.entries(data.services)) {
-                const statusClass = status ? 'status-running' : 'status-stopped';
-                const statusText = status ? '{{ t("EXECUTANDO") }}' : '{{ t("PARADO") }}';
-                servicesHtml += `<div class="status-indicator ${statusClass}"><i class="fas fa-circle"></i> ${service}: ${statusText}</div>`;
-            }
-            document.getElementById('services-status').innerHTML = servicesHtml;
-        });
-    }
-
-    function checkServices() {
-        fetch('/service_status').then(response => response.json()).then(data => {
-            showAlert('{{ t("Check de serviços registrado no log") }}', 'info');
-            updateAllServiceStatus();
-        });
-    }
-
-    function loadDirectories() {
-        fetch('/list_directories').then(response => response.json()).then(data => {
-            let html = '<ul>';
-            data.directories.forEach(dir => { html += `<li>${dir}</li>`; });
-            html += '</ul>';
-            document.getElementById('directories-list').innerHTML = html;
-        });
-    }
-
-    function loadConnectedIPs() {
-        fetch('/connected_ips').then(response => response.json()).then(data => {
-            let html = '';
-            data.ips.forEach(ip => { 
-                html += `<div class="ip-item">
-                            <span><strong>${ip.ip}</strong> <span style="color:#7f8c8d; font-size:0.85rem;">- ${ip.page}</span></span>
-                            <div>
-                                <span class="ip-status ${ip.status}">${ip.status.toUpperCase()}</span>
-                                <button class="btn btn-sm btn-warning" style="margin-left: 10px;" onclick="restartTerminal('${ip.ip}')"><i class="fas fa-power-off"></i> {{ t('Reiniciar') }}</button>
-                            </div>
-                         </div>`; 
-            });
-            document.getElementById('connected-ips').innerHTML = html;
-        });
-    }
-    
-    function restartTerminal(ip) {
-        if(confirm(`{{ t('Tem a certeza que deseja reiniciar o terminal remoto no IP:') }} ${ip}?`)) {
-            fetch('/api/restart_terminal', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ip: ip})
-            })
-            .then(r => r.json())
-            .then(data => {
-                showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-            })
-            .catch(e => showAlert('{{ t("Erro de comunicação.") }}', 'danger'));
-        }
-    }
-    
-    function loadUserList() {
-        fetch('/api/users').then(r => r.json()).then(data => {
-            const tableBody = document.getElementById('user-list-body');
-            tableBody.innerHTML = '';
-            data.users.forEach(user => {
-                const row = document.createElement('tr');
-                let actions = '';
-                if (IS_DEV && user.username !== 'cid') {
-                    actions = `<button class="btn btn-sm btn-danger" onclick="deleteUser('${user.username}')"><i class="fas fa-trash"></i> {{ t('Apagar') }}</button>`;
-                }
-                const userTypeStr = user.is_dev ? '{{ t("Developer") }}' : '{{ t("Normal") }}';
-                row.innerHTML = `<td>${user.username}</td><td>${userTypeStr}</td><td class="actions">${actions}</td>`;
-                tableBody.appendChild(row);
-            });
-        });
-    }
-
-    document.getElementById('createUserForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const username = this.new_username.value;
-        const password = this.new_password.value;
-        const confirm = this.confirm_password.value;
-        if (password !== confirm) { showAlert('{{ t("Passwords não coincidem.") }}', 'danger'); return; }
-        fetch('/api/users/create', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username, password})
-        }).then(r => r.json()).then(data => {
-            showAlert(data.message, data.status);
-            if(data.status === 'success') { this.reset(); loadUserList(); }
-        });
-    });
-    
-    document.getElementById('changePasswordForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const currentPassword = this.current_password ? this.current_password.value : '';
-        const newPassword = this.new_password.value;
-        const confirmPassword = this.confirm_password.value;
-        if (newPassword !== confirmPassword) { showAlert('{{ t("As novas passwords não coincidem.") }}', 'danger'); return; }
-        fetch('/api/users/change_password', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
-        }).then(r => r.json()).then(data => {
-            showAlert(data.message, data.status);
-            if (data.status === 'success') this.reset();
-        });
-    });
-
-    function deleteUser(username) {
-        if (confirm(`{{ t('Tem a certeza que quer apagar o utilizador ') }}${username}?`)) {
-            fetch('/api/users/delete', {
-                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username})
-            }).then(r => r.json()).then(data => {
-                showAlert(data.message, data.status);
-                if (data.status === 'success') loadUserList();
-            });
-        }
-    }
-
-    function loadLogFiles() {
-        fetch('/api/log_files').then(r => r.json()).then(data => {
-            const container = document.getElementById('log-tabs-container');
-            container.innerHTML = '';
-            
-            if (!data.files || data.files.length === 0) {
-                container.innerHTML = '<span style="color:#fff; padding:10px;">{{ t("Nenhum log encontrado.") }}</span>';
-                return;
-            }
-            
-            if (!data.files.includes(currentLogFile)) {
-                currentLogFile = data.files.includes('backup_server.log') ? 'backup_server.log' : data.files[0];
-            }
-            
-            data.files.forEach(file => {
-                const btn = document.createElement('button');
-                btn.className = `log-tab ${file === currentLogFile ? 'active' : ''}`;
-                btn.innerText = file;
-                btn.onclick = () => {
-                    currentLogFile = file;
-                    document.querySelectorAll('.log-tab').forEach(t => t.classList.remove('active'));
-                    btn.classList.add('active');
-                    refreshCurrentLog();
-                };
-                container.appendChild(btn);
-            });
-            
-            refreshCurrentLog();
-        });
-    }
-
-    function refreshCurrentLog() {
-        document.getElementById('logs-content').innerHTML = '<span style="color:#f39c12;">{{ t("A carregar ") }}' + currentLogFile + '...</span>';
-        fetch('/logs?file=' + encodeURIComponent(currentLogFile)).then(response => {
-            if (!response.ok) throw new Error('{{ t("Falha no servidor ao ler o ficheiro.") }}');
-            return response.json();
-        }).then(data => {
-            const escapedLogs = data.logs.map(line => line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
-            document.getElementById('logs-content').innerHTML = escapedLogs.join('<br>');
-            document.getElementById('logs-content').scrollTop = document.getElementById('logs-content').scrollHeight;
-        }).catch(error => { document.getElementById('logs-content').innerHTML = '<span style="color:#e74c3c;">{{ t("Erro ao carregar logs") }}</span>'; });
-    }
-
-    function clearCurrentLog() {
-        const confirmation = prompt('{{ t("Tem certeza que deseja limpar ") }}' + currentLogFile + '{{ t("? Digite sim para confirmar.") }}');
-        if (confirmation && confirmation.toLowerCase() === 'sim') {
-            fetch('/clear_logs', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({file: currentLogFile})
-            }).then(response => response.json()).then(data => {
-                showAlert(data.message, data.status === 'success' ? 'success' : 'danger');
-                if (data.status === 'success') refreshCurrentLog();
-            });
-        }
-    }
-
-    function downloadCurrentLog() { 
-        window.open('/download_logs?file=' + encodeURIComponent(currentLogFile), '_blank'); 
-    }
-
-    function showAlert(message, type) {
-        let messageContainer = document.querySelector('.message-container');
-        if (!messageContainer) {
-            messageContainer = document.createElement('div');
-            messageContainer.className = 'message-container';
-            document.body.appendChild(messageContainer);
-        }
-        const alertDiv = document.createElement('div');
-        alertDiv.className = `alert alert-${type}`;
-        alertDiv.innerHTML = `<i class="fas fa-${type === 'success' ? 'check' : 'exclamation'}-circle"></i> ${message}`;
-        messageContainer.insertBefore(alertDiv, messageContainer.firstChild);
-        setTimeout(() => { if (alertDiv.parentNode) alertDiv.parentNode.removeChild(alertDiv); }, 5000);
-        alertDiv.addEventListener('click', () => { if (alertDiv.parentNode) alertDiv.parentNode.removeChild(alertDiv); });
-    }
-
-    window.onclick = function (event) {
-        const modal = document.getElementById('fileBrowserModal');
-        if (event.target === modal) closeFileBrowser();
-    }
-
-    document.addEventListener('DOMContentLoaded', function () {
-        setTimeout(function () { loadConfigurationsFromServer(); }, 1500);
-        setTimeout(checkAllPaths, 1000);
-        setTimeout(updateAllServiceStatus, 1500);
-
-        setInterval(() => {
-            const activeTab = document.querySelector('.tab-content.active');
-            if (!activeTab) return;
-            switch(activeTab.id) {
-                case 'configuracao': updateAllServiceStatus(); break;
-                case 'diagnostics': loadDiagnostics(); break;
-                case 'servicos': loadServiceStatusAndCounters(); break;
-                case 'gestao_mosaico': loadMosaicStatus(); break;
-            }
-        }, 15000);
-    });
-</script>
-
-</body>
-</html>
-"""
-# ==============================================================================
-# FUNÇÕES CORE DE SEGURANÇA E LEITURA
-# ==============================================================================
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login', next=request.url))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def load_users():
-    if not os.path.exists(USER_DATA_PATH) or os.path.getsize(USER_DATA_PATH) == 0:
-        default_user = {"cid": {"password": generate_password_hash("109352"), "is_dev": True}}
-        save_users(default_user)
-        return default_user
-    return safe_load_json(USER_DATA_PATH, {})
-
-def save_users(users_data):
-    return safe_save_json(USER_DATA_PATH, users_data)
-
-def load_config():
-    default_cfg = {
-        "ssd_path": "/volume2/ssd_mirror",
-        "mirror_source_path": "/volume1/inspecao_organizadas",
-        "mosaic_config_folder": BASE_CONFIG_PATH,
-        "log_file_path": LOG_FILE,
-        "article_analysis_path": "/volume1/inspecao_organizadas",
-        "mirror_include_subfolders": True,
-        "ssd_retention_days": 5,
-        "hdd_retention_months": 6,
-        "scan_interval_sec": 1,
-        "pkiris_retention_days": 5,
-        "pkiris_dst_root": "",
-        "historicos_retention_days": 365,
-        "historicos_dst_root": "",
-        "artigos_retention_days": 365,
-        "artigos_dst_root": "",
-        "turnos": {
-            "turno1": {"inicio": "06:00", "fim": "14:00"},
-            "turno2": {"inicio": "14:00", "fim": "22:00"},
-            "turno3": {"inicio": "22:00", "fim": "06:00"}
-        },
-        "backup_enabled": True,
-        "visao_global": {
-            "port_lateral": 5098,
-            "port_fundo": 5099,
-            "cycle_mode_active": True,
-            "cycle_time_sec": 30,
-            "mosaic_lateral_active": False,
-            "mosaic_fundo_active": False
-        },
-        "linhas": {
-            "21": { 
-                "cycle_mode_active": False, "cycle_time_sec": 30, "use_test_mode": False,
-                "lateral": { "src": "", "dst": "", "src_prod": "", "dst_prod": "", "src_test": "", "dst_test": "", "pkiris_src": "", "historico_src": "", "artigo_src": "", "backup_active": True, "delete_source": True, "mosaic_active": False, "mosaic_port": 5001 },
-                "fundo": { "src": "", "dst": "", "src_prod": "", "dst_prod": "", "src_test": "", "dst_test": "", "pkiris_src": "", "historico_src": "", "artigo_src": "", "backup_active": True, "delete_source": True, "mosaic_active": False, "mosaic_port": 5002 }
-            }
-        }
-    }
-    
-    cfg = safe_load_json(CONFIG_FILE, default_cfg)
-    
-    # Limpeza de rotas obsoletas
-    if 'linhas' in cfg and '34' in cfg['linhas']:
-        cfg['linhas']['34'].pop('1', None)
-        cfg['linhas']['34'].pop('2', None)
-        
-    for key in default_cfg:
-        if key not in cfg:
-            cfg[key] = default_cfg[key]
-            
-    return cfg
-
-def get_current_shift():
-    config = load_config()
-    turnos = config.get('turnos', {})
-    now = datetime.now()
-    current_time = now.strftime('%H:%M')
-    for turno_name, turno_config in turnos.items():
-        inicio = turno_config.get('inicio', '06:00')
-        fim = turno_config.get('fim', '14:00')
-        if inicio > fim:
-            if current_time >= inicio or current_time < fim: return turno_name
-        else:
-            if inicio <= current_time < fim: return turno_name
-    return 'turno1'
-
-def get_current_shift_for_log():
-    now = datetime.now().time()
-    if now >= datetime.strptime("06:00", "%H:%M").time() and now < datetime.strptime("14:00", "%H:%M").time():
-        return "turno1"
-    elif now >= datetime.strptime("14:00", "%H:%M").time() and now < datetime.strptime("22:00", "%H:%M").time():
-        return "turno2"
-    else:
-        return "turno3"
-
-def log_user_action(username, action):
-    try:
-        current_shift = get_current_shift_for_log()
-        today = datetime.now().strftime("%Y-%m-%d")
-        log_filename = f"user_actions_{today}_{current_shift}.log"
-        log_filepath = os.path.join(ACTION_LOG_FOLDER, log_filename)
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"{timestamp} - User: {username} - Action: {action}\n"
-        with open(log_filepath, 'a', encoding='utf-8') as f:
-            f.write(log_entry)
-    except Exception as e:
-        logging.error(f"Failed to log user action: {e}")
-
-def get_mosaic_config_path():
-    return os.path.join(BASE_CONFIG_PATH, "mosaic_settings.json")
-
-def load_mosaic_config():
-    default_config = {
-        "overview": {
-            "lateral": { "orientation": 0, "layout": "horizontal", "max_images": 8, "active_machines": {} },
-            "fundo": { "orientation": 0, "layout": "horizontal", "max_images": 8, "active_machines": {} }
-        },
-        "xml_config": {
-            "available_xml_fields": [],
-            "selectedFields": { "timestamp": "Timestamp", "result": "Result", "defect_type": "Defect Type", "confidence": "Confidence" }
-        },
-        "display_config": {
-            "orientation": 0, "grid_columns": 4, "grid_lines": 3, "image_size": 300,
-            "max_images": 50, "refresh_interval": 30, "zoom_percentage": 250
-        },
-        "overlay_config": { "top": "NOM_ART", "bottom_left": "NUM_MOULE", "bottom_right": "DATE" },
-        "filter_config": { "NUM_CAM": { "enabled": True, "available_values": [], "selected_values": [] } }
-    }
-    
-    mosaic_file = get_mosaic_config_path()
-    config = safe_load_json(mosaic_file, default_config)
-    
-    if config is not default_config:
-        for key, value in default_config.items():
-            if key not in config:
-                config[key] = value
-            elif isinstance(value, dict):
-                for sub_key, sub_value in value.items():
-                    if sub_key not in config[key]:
-                        config[key][sub_key] = sub_value
-    return config
-
-last_shift_reset = get_current_shift()
-
-# ==============================================================================
-# TEMPLATES HTML 
-# ==============================================================================
-
-LOGIN_TEMPLATE = r"""
-<!DOCTYPE html>
-<html lang="{{ lang }}">
-<head>
-    <meta charset="UTF-8">
-    <title>{{ t('Login - Sistema de Gestão') }}</title>
-    <style>
-        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .login-container { background: rgba(255, 255, 255, 0.95); padding: 2.5rem 3rem; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); width: 100%; max-width: 400px; text-align: center; }
-        .logo { width: 180px; height: auto; margin: 0 auto 1.5rem auto; display: block; }
-        .login-container h1 { color: #2c3e50; margin-bottom: 1.5rem; font-size: 1.8rem; }
-        .form-group { margin-bottom: 1.5rem; text-align: left; }
-        .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #495057; }
-        .form-control { width: 100%; padding: 0.8rem; border: 1px solid #ced4da; border-radius: 6px; font-size: 1rem; box-sizing: border-box; }
-        .btn { width: 100%; padding: 0.9rem; border: none; border-radius: 6px; background: #667eea; color: white; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: background 0.3s ease; }
-        .btn:hover { background: #5a6fd6; }
-        .error-message { color: #e74c3c; background: #f8d7da; border: 1px solid #f5c6cb; padding: 0.8rem; border-radius: 6px; margin-top: 1.5rem; }
-        .lang-selector { display: flex; justify-content: center; gap: 15px; margin-bottom: 20px; }
-        .lang-selector label { cursor: pointer; display: flex; align-items: center; font-size: 1.5rem; }
-        .lang-selector input[type="radio"] { display: none; }
-        .lang-selector input[type="radio"]:checked + span { border-bottom: 2px solid #667eea; transform: scale(1.1); }
-        .lang-selector span { padding: 2px; transition: all 0.2s ease; }
-    </style>
-</head>
-<body>
-    <div class="login-container">
-        {% if logo_data %}
-            <img src="data:image/png;base64,{{ logo_data }}" alt="Logo da Empresa" class="logo">
-        {% endif %}
-        
-        <div class="lang-selector">
-            <label><input type="radio" name="ui_lang" value="pt" onclick="changeLang('pt')" {% if lang == 'pt' %}checked{% endif %}><span>🇵🇹</span></label>
-            <label><input type="radio" name="ui_lang" value="es" onclick="changeLang('es')" {% if lang == 'es' %}checked{% endif %}><span>🇪🇸</span></label>
-            <label><input type="radio" name="ui_lang" value="en" onclick="changeLang('en')" {% if lang == 'en' %}checked{% endif %}><span>🇬🇧</span></label>
-            <label><input type="radio" name="ui_lang" value="pl" onclick="changeLang('pl')" {% if lang == 'pl' %}checked{% endif %}><span>🇵🇱</span></label>
-            <label><input type="radio" name="ui_lang" value="bg" onclick="changeLang('bg')" {% if lang == 'bg' %}checked{% endif %}><span>🇧🇬</span></label>
-        </div>
-
-        <h1>{{ t('Gestão de Backups') }}</h1>
-        <form method="post">
-            <div class="form-group">
-                <label>{{ t('Utilizador') }}</label>
-                <input type="text" name="username" class="form-control" required>
-            </div>
-            <div class="form-group">
-                <label>{{ t('Password') }}</label>
-                <input type="password" name="password" class="form-control" required>
-            </div>
-            <button type="submit" class="btn">{{ t('Entrar no Painel') }}</button>
-        </form>
-        <div style="margin-top:20px;">
-            <a href="/historico_externo" style="color: #667eea; text-decoration: none; font-weight: bold;">&#8594; {{ t('Aceder ao Portal Público de Histórico') }}</a>
-        </div>
         <div style="margin-top:10px;">
-            <a href="http://{{ request.host.split(':')[0] }}:5582" style="color: #8e44ad; text-decoration: none; font-weight: bold;">&#8594; {{ t('Portal Criação Pen PKIRIS') }}</a>
+            <a href="http://{{ request.host.split(':')[0] }}:5583" style="color: #e67e22; text-decoration: none; font-weight: bold;">&#8594; {{ t('Portal Gestor SSH') }}</a>
         </div>
         {% if error %}<p class="error-message">{{ t(error) }}</p>{% endif %}
     </div>
@@ -2728,9 +449,12 @@ BACKUP_TEMPLATE = r"""
     .time-input-group input { padding: 0.5rem; border: 1px solid #ced4da; border-radius: 4px; }
     .browse-btn { padding: 0.5rem 1rem; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; gap: 0.25rem; }
     .browse-btn:hover { background: #138496; }
+    
     .status-led { width: 16px; height: 16px; border-radius: 50%; background: #dc3545; display: inline-block; margin-left: 0.5rem; position: relative; transition: all 0.3s ease; }
     .status-led.online { background: #28a745; box-shadow: 0 0 8px rgba(40, 167, 69, 0.5); }
-    .status-led.checking { background: #ffc107; animation: pulse 1.5s infinite; }
+    .status-led.warning { background: #ffc107; box-shadow: 0 0 8px rgba(255, 193, 7, 0.5); }
+    .status-led.checking { background: #17a2b8; animation: pulse 1.5s infinite; }
+    
     .service-led { width: 12px; height: 12px; border-radius: 50%; background: #dc3545; display: inline-block; margin-left: 0.5rem; position: relative; transition: all 0.3s ease; }
     .service-led.active { background: #28a745; box-shadow: 0 0 6px rgba(40, 167, 69, 0.8); }
     .service-led.inactive { background: #dc3545; }
@@ -2755,8 +479,6 @@ BACKUP_TEMPLATE = r"""
     .stats-label { color: #6c757d; font-size: 0.9rem; margin-top: 0.5rem; }
     
     .progress-container { width: 100%; margin-top: 15px; }
-    
-    /* Estilos atualizados para as abas dos logs */
     .log-tabs { display: flex; overflow-x: auto; background: #2c3e50; border-radius: 6px 6px 0 0; padding: 5px 5px 0 5px; margin-top: 10px; }
     .log-tab { padding: 8px 15px; background: #34495e; color: #bdc3c7; border: none; cursor: pointer; border-radius: 4px 4px 0 0; margin-right: 5px; font-size: 0.85rem; font-family: monospace; transition: all 0.2s; white-space: nowrap; }
     .log-tab:hover { background: #3fc380; color: white; }
@@ -2764,7 +486,7 @@ BACKUP_TEMPLATE = r"""
     .log-content-area { background: #1e1e1e; color: #fff; padding: 1rem; border-radius: 0 0 6px 6px; font-family: monospace; height: 500px; overflow-y: auto; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
     .log-content-area p { margin: 2px 0; }
     
-    .log-window { background: #1e1e1e; color: #2ecc71; font-family: monospace; font-size: 0.85rem; height: 180px; overflow-y: auto; padding: 10px; border-radius: 6px; margin-bottom: 10px; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
+    .log-window { background: #1e1e1e; color: #2ecc71; font-family: monospace; font-size: 0.85rem; height: 400px; overflow-y: auto; padding: 10px; border-radius: 6px; margin-bottom: 10px; box-shadow: inset 0 0 10px rgba(0,0,0,0.5); }
     .log-current-file { color: #f1c40f; margin-bottom: 10px; font-family: monospace; font-size: 0.85rem; word-break: break-all; }
     .progress { background: #e9ecef; border-radius: 0.5rem; height: 2.5rem; overflow: hidden; position: relative; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2); }
     .progress-bar { background: linear-gradient(45deg, #667eea, #764ba2); height: 100%; transition: width 0.4s ease; width: 0%; position: absolute; top: 0; left: 0; z-index: 1; }
@@ -2862,13 +584,13 @@ BACKUP_TEMPLATE = r"""
             <form id="configGeralForm">
                 <div class="path-input-group">
                     <label>{{ t('SSD Path:') }}</label>
-                    <input type="text" name="ssd_path" id="ssd_path" class="form-control">
+                    <input type="text" name="ssd_path" id="ssd_path" class="form-control" onchange="checkPathAccess(this.id)">
                     <button type="button" class="browse-btn" onclick="openFileBrowser('ssd_path')"><i class="fas fa-folder-open"></i></button>
                     <span class="status-led" id="led_ssd_path"></span>
                 </div>
                 <div class="path-input-group">
                     <label>{{ t('Pasta para Mirror SSD:') }}</label>
-                    <input type="text" name="mirror_source_path" id="mirror_source_path" class="form-control">
+                    <input type="text" name="mirror_source_path" id="mirror_source_path" class="form-control" onchange="checkPathAccess(this.id)">
                     <button type="button" class="browse-btn" onclick="openFileBrowser('mirror_source_path')"><i class="fas fa-folder-open"></i></button>
                     <span class="status-led" id="led_mirror_source_path"></span>
                 </div>
@@ -2878,7 +600,7 @@ BACKUP_TEMPLATE = r"""
                 </div>
                 <div class="path-input-group">
                     <label>{{ t('Caminho Ficheiro de Log:') }}</label>
-                    <input type="text" name="log_file_path" id="log_file_path" class="form-control">
+                    <input type="text" name="log_file_path" id="log_file_path" class="form-control" onchange="checkPathAccess(this.id)">
                     <button type="button" class="browse-btn" onclick="openFileBrowser('log_file_path')"><i class="fas fa-file-alt"></i></button>
                     <span class="status-led" id="led_log_file_path"></span>
                 </div>
@@ -3147,8 +869,9 @@ BACKUP_TEMPLATE = r"""
                 </div>
                 <div class="path-input-group" style="margin-bottom: 20px;">
                     <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz PKIRIS:') }}</label>
-                    <input type="text" name="pkiris_dst_root" id="pkiris_dst_root" class="form-control">
+                    <input type="text" name="pkiris_dst_root" id="pkiris_dst_root" class="form-control" onchange="checkPathAccess(this.id)">
                     <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_dst_root')"><i class="fas fa-folder-open"></i></button>
+                    <span class="status-led" id="led_pkiris_dst_root"></span>
                 </div>
                 
                 <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Onde a máquina gera os .pkiris)') }}</h4>
@@ -3159,13 +882,15 @@ BACKUP_TEMPLATE = r"""
                         <div class="machine-section">
                             <div class="path-input-group">
                                 <label style="min-width: 200px;">{{ t('Origem PKIRIS (Lateral):') }}</label>
-                                <input type="text" name="pkiris_src_{{ linha }}_lateral" id="pkiris_src_{{ linha }}_lateral" class="form-control">
+                                <input type="text" name="pkiris_src_{{ linha }}_lateral" id="pkiris_src_{{ linha }}_lateral" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_pkiris_src_{{ linha }}_lateral"></span>
                             </div>
                             <div class="path-input-group">
                                 <label style="min-width: 200px;">{{ t('Origem PKIRIS (Fundo):') }}</label>
-                                <input type="text" name="pkiris_src_{{ linha }}_fundo" id="pkiris_src_{{ linha }}_fundo" class="form-control">
+                                <input type="text" name="pkiris_src_{{ linha }}_fundo" id="pkiris_src_{{ linha }}_fundo" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_pkiris_src_{{ linha }}_fundo"></span>
                             </div>
                         </div>
                     </div>
@@ -3181,8 +906,9 @@ BACKUP_TEMPLATE = r"""
                             {% set maquina = maq ~ ramal %}
                             <div class="path-input-group">
                                 <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
-                                <input type="text" name="pkiris_src_34_{{ maquina }}" id="pkiris_src_34_{{ maquina }}" class="form-control">
+                                <input type="text" name="pkiris_src_34_{{ maquina }}" id="pkiris_src_34_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('pkiris_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_pkiris_src_34_{{ maquina }}"></span>
                             </div>
                             {% endfor %}
                         </div>
@@ -3214,8 +940,9 @@ BACKUP_TEMPLATE = r"""
                 </div>
                 <div class="path-input-group" style="margin-bottom: 20px;">
                     <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz Históricos:') }}</label>
-                    <input type="text" name="historicos_dst_root" id="historicos_dst_root" class="form-control">
+                    <input type="text" name="historicos_dst_root" id="historicos_dst_root" class="form-control" onchange="checkPathAccess(this.id)">
                     <button type="button" class="browse-btn" onclick="openFileBrowser('historicos_dst_root')"><i class="fas fa-folder-open"></i></button>
+                    <span class="status-led" id="led_historicos_dst_root"></span>
                 </div>
                 
                 <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Pastas dos Históricos)') }}</h4>
@@ -3226,13 +953,15 @@ BACKUP_TEMPLATE = r"""
                         <div class="machine-section">
                             <div class="path-input-group">
                                 <label style="min-width: 200px;">{{ t('Origem Histórico (Lateral):') }}</label>
-                                <input type="text" name="historico_src_{{ linha }}_lateral" id="historico_src_{{ linha }}_lateral" class="form-control">
+                                <input type="text" name="historico_src_{{ linha }}_lateral" id="historico_src_{{ linha }}_lateral" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_historico_src_{{ linha }}_lateral"></span>
                             </div>
                             <div class="path-input-group">
                                 <label style="min-width: 200px;">{{ t('Origem Histórico (Fundo):') }}</label>
-                                <input type="text" name="historico_src_{{ linha }}_fundo" id="historico_src_{{ linha }}_fundo" class="form-control">
+                                <input type="text" name="historico_src_{{ linha }}_fundo" id="historico_src_{{ linha }}_fundo" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_historico_src_{{ linha }}_fundo"></span>
                             </div>
                         </div>
                     </div>
@@ -3248,8 +977,9 @@ BACKUP_TEMPLATE = r"""
                             {% set maquina = maq ~ ramal %}
                             <div class="path-input-group">
                                 <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
-                                <input type="text" name="historico_src_34_{{ maquina }}" id="historico_src_34_{{ maquina }}" class="form-control">
+                                <input type="text" name="historico_src_34_{{ maquina }}" id="historico_src_34_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('historico_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_historico_src_34_{{ maquina }}"></span>
                             </div>
                             {% endfor %}
                         </div>
@@ -3280,8 +1010,9 @@ BACKUP_TEMPLATE = r"""
                 </div>
                 <div class="path-input-group" style="margin-bottom: 20px;">
                     <label style="min-width: 200px; font-weight: bold;">{{ t('Pasta Destino Raiz Artigos:') }}</label>
-                    <input type="text" name="artigos_dst_root" id="artigos_dst_root" class="form-control">
+                    <input type="text" name="artigos_dst_root" id="artigos_dst_root" class="form-control" onchange="checkPathAccess(this.id)">
                     <button type="button" class="browse-btn" onclick="openFileBrowser('artigos_dst_root')"><i class="fas fa-folder-open"></i></button>
+                    <span class="status-led" id="led_artigos_dst_root"></span>
                 </div>
                 
                 <h4 style="margin-top:20px; border-bottom:2px solid #ccc; padding-bottom:5px; color: #2c3e50;"><i class="fas fa-sitemap"></i> {{ t('Diretorias de Origem (Pastas dos Artigos)') }}</h4>
@@ -3292,13 +1023,15 @@ BACKUP_TEMPLATE = r"""
                         <div class="machine-section">
                             <div class="path-input-group">
                                 <label style="min-width: 200px;">{{ t('Origem Artigo (Lateral):') }}</label>
-                                <input type="text" name="artigo_src_{{ linha }}_lateral" id="artigo_src_{{ linha }}_lateral" class="form-control">
+                                <input type="text" name="artigo_src_{{ linha }}_lateral" id="artigo_src_{{ linha }}_lateral" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_{{ linha }}_lateral')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_artigo_src_{{ linha }}_lateral"></span>
                             </div>
                             <div class="path-input-group">
                                 <label style="min-width: 200px;">{{ t('Origem Artigo (Fundo):') }}</label>
-                                <input type="text" name="artigo_src_{{ linha }}_fundo" id="artigo_src_{{ linha }}_fundo" class="form-control">
+                                <input type="text" name="artigo_src_{{ linha }}_fundo" id="artigo_src_{{ linha }}_fundo" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_{{ linha }}_fundo')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_artigo_src_{{ linha }}_fundo"></span>
                             </div>
                         </div>
                     </div>
@@ -3314,8 +1047,9 @@ BACKUP_TEMPLATE = r"""
                             {% set maquina = maq ~ ramal %}
                             <div class="path-input-group">
                                 <label style="min-width: 150px;">{{ t('Origem ') }}{{ t(maq.capitalize()) }} {{ ramal }}:</label>
-                                <input type="text" name="artigo_src_34_{{ maquina }}" id="artigo_src_34_{{ maquina }}" class="form-control">
+                                <input type="text" name="artigo_src_34_{{ maquina }}" id="artigo_src_34_{{ maquina }}" class="form-control" onchange="checkPathAccess(this.id)">
                                 <button type="button" class="browse-btn" onclick="openFileBrowser('artigo_src_34_{{ maquina }}')"><i class="fas fa-folder-open"></i></button>
+                                <span class="status-led" id="led_artigo_src_34_{{ maquina }}"></span>
                             </div>
                             {% endfor %}
                         </div>
@@ -3487,8 +1221,9 @@ BACKUP_TEMPLATE = r"""
             <form id="normal_mosaic_config">
                 <div class="path-input-group">
                     <label>{{ t('Pasta de origem para análise (XML):') }}</label>
-                    <input type="text" name="mosaic_source_path" id="mosaic_source_path" class="form-control">
+                    <input type="text" name="mosaic_source_path" id="mosaic_source_path" class="form-control" onchange="checkPathAccess(this.id)">
                     <button type="button" class="browse-btn" onclick="openFileBrowser('mosaic_source_path')"><i class="fas fa-folder-open"></i> {{ t('Procurar') }}</button>
+                    <span class="status-led" id="led_mosaic_source_path"></span>
                 </div>
                 <h4><i class="fas fa-file-code"></i> {{ t('Campos de Dados XML') }}</h4>
                 <button type="button" class="btn btn-primary" id="analyzeXmlBtn" onclick="analyzeXmlFields()"><i class="fas fa-search"></i> {{ t('Re-Analisar Campos XML') }}</button>
@@ -3603,7 +1338,11 @@ BACKUP_TEMPLATE = r"""
         const clickedTab = document.querySelector(`.tab[onclick="showTab('${tabName}')"]`);
         if (clickedTab) clickedTab.classList.add('active');
 
-        if (tabName === 'configuracao') { setTimeout(checkAllPaths, 500); setTimeout(updateAllServiceStatus, 1000); pollArticleAnalysis(); }
+        if (tabName === 'configuracao' || tabName === 'backup_pkiris' || tabName === 'backup_historicos' || tabName === 'backup_artigos') { 
+            setTimeout(checkAllPaths, 500); 
+            setTimeout(updateAllServiceStatus, 1000); 
+            if(tabName === 'configuracao') pollArticleAnalysis(); 
+        }
         else if (tabName === 'servicos') { loadServiceStatusAndCounters(); }
         else if (tabName === 'diagnostics') { loadDiagnostics(); }
         else if (tabName === 'logs') { loadLogFiles(); }
@@ -3614,7 +1353,10 @@ BACKUP_TEMPLATE = r"""
     }
 
     function loadConfigurationsFromServer() {
-        fetch('/get_config').then(response => response.json()).then(config => { populateAllFormFields(config); }).catch(error => { showAlert('{{ t("Erro ao carregar configurações.") }}', 'danger'); });
+        fetch('/get_config').then(response => response.json()).then(config => { 
+            populateAllFormFields(config); 
+            setTimeout(checkAllPaths, 300);
+        }).catch(error => { showAlert('{{ t("Erro ao carregar configurações.") }}', 'danger'); });
     }
 
     function populateAllFormFields(config) {
@@ -4080,24 +1822,49 @@ BACKUP_TEMPLATE = r"""
         }
     }
 
+    /* CORREÇÃO DO CÓDIGO JAVASCRIPT DOS LEDS - IMPLEMENTADA LOGICA WARNING QUANDO VAZIO */
     function checkPathAccess(inputId) {
         const ledId = 'led_' + inputId;
         const pathElem = document.getElementById(inputId);
         const path = pathElem ? pathElem.value : '';
         const led = document.getElementById(ledId);
-        if (!path || path.trim() === '') { if(led) led.className = 'status-led'; return; }
-        if(led) led.className = 'status-led checking';
+        
+        if (!led) return;
+
+        // Deteta se o campo está vazio e impõe a cor amarela (warning)
+        if (!path || path.trim() === '') {
+            led.className = 'status-led warning';
+            led.title = '{{ t("Caminho não configurado") }}';
+            return;
+        }
+        
+        led.className = 'status-led checking';
+        led.title = '{{ t("A verificar...") }}';
+        
         fetch('/check_path_access', {
             method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: path})
         }).then(response => response.json()).then(data => {
-            if (data.accessible) { if(led) { led.className = 'status-led online'; led.title = '{{ t("Caminho acessível") }}'; } } 
-            else { if(led) { led.className = 'status-led'; led.title = `{{ t("Não acessível") }}`; } }
-        }).catch(error => { if(led) { led.className = 'status-led'; led.title = '{{ t("Erro ao verificar") }}'; } });
+            if (data.accessible) { 
+                led.className = 'status-led online'; 
+                led.title = '{{ t("Caminho acessível") }}'; 
+            } else { 
+                led.className = 'status-led warning'; 
+                led.title = '{{ t("Não acessível: ") }}' + (data.error || ''); 
+            }
+        }).catch(error => { 
+            led.className = 'status-led'; 
+            led.title = '{{ t("Erro ao verificar") }}'; 
+        });
     }
 
+    /* CORREÇÃO PARA FORÇAR A LEITURA DOS CAMPOS VAZIOS NO ARRANQUE */
     function checkAllPaths() {
         const pathInputs = document.querySelectorAll('input[type="text"]');
-        pathInputs.forEach(input => { if (input.value && input.value.trim() !== '' && input.id) checkPathAccess(input.id); });
+        pathInputs.forEach(input => { 
+            if (input.id && document.getElementById('led_' + input.id)) {
+                checkPathAccess(input.id); 
+            }
+        });
     }
 
     function updateServiceLED(ledId, isActive) {
@@ -4745,6 +2512,7 @@ BACKUP_TEMPLATE = r"""
 </body>
 </html>
 """
+
 # ==============================================================================
 # LÓGICA DE BACKEND E GESTÃO DE FICHEIROS
 # ==============================================================================
@@ -4818,7 +2586,7 @@ def article_analysis_worker(reset=False, explicit_path=""):
     
     def log_msg(msg):
         analysis_status['recent_logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-        if len(analysis_status['recent_logs']) > 15:
+        if len(analysis_status['recent_logs']) > 2000:
             analysis_status['recent_logs'].pop(0)
 
     config = load_config()
@@ -4853,75 +2621,122 @@ def article_analysis_worker(reset=False, explicit_path=""):
                 return key
         return "Desconhecida"
 
-    tasks = {}
-    log_msg(f"{_t('A percorrer pasta mestre à procura de datas:')} {analysis_path}")
+    turnos_cfg = config.get('turnos', {})
+    def get_shift_from_time(timestamp):
+        dt = datetime.fromtimestamp(timestamp)
+        t_str = dt.strftime('%H:%M')
+        for t_name, t_cfg in turnos_cfg.items():
+            inicio = t_cfg.get('inicio', '06:00')
+            fim = t_cfg.get('fim', '14:00')
+            if inicio > fim:
+                if t_str >= inicio or t_str < fim: return t_name
+            else:
+                if inicio <= t_str < fim: return t_name
+        return 'turno1'
+
+    log_msg(f"{_t('A analisar recursivamente todas as diretorias em:')} {analysis_path}")
+    
+    stats = {} 
+    dates_grouped = {} 
+    total_xmls = 0
+    total_imgs = 0
     
     try:
         for root, dirs, files in os.walk(analysis_path):
             if analysis_status['stop_flag']: break
-            basename = os.path.basename(root)
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", basename):
-                linha = get_linha_from_path(root)
-                if linha != "Desconhecida":
-                    if linha not in tasks: tasks[linha] = set()
-                    tasks[linha].add((root, basename))
-                dirs.clear() 
+            
+            linha = get_linha_from_path(root)
+            if linha == "Desconhecida":
+                continue
+                
+            date_match = re.search(r'(\d{4}-\d{2}-\d{2})', root)
+            
+            for file in files:
+                if analysis_status['stop_flag']: break
+                file_ext = file.lower()
+                is_xml = file_ext.endswith('.xml')
+                is_img = file_ext.endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff'))
+                
+                if is_xml or is_img:
+                    filepath = os.path.join(root, file)
+                    try:
+                        mtime = os.path.getmtime(filepath)
+                        if date_match:
+                            date_str = date_match.group(1)
+                        else:
+                            date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+                            
+                        shift = get_shift_from_time(mtime)
+                        
+                        if date_str not in stats: stats[date_str] = {}
+                        if shift not in stats[date_str]: stats[date_str][shift] = {}
+                        if linha not in stats[date_str][shift]: stats[date_str][shift][linha] = {'xml': 0, 'img': 0}
+                        
+                        if is_xml:
+                            stats[date_str][shift][linha]['xml'] += 1
+                            total_xmls += 1
+                            k = (linha, date_str)
+                            if k not in dates_grouped: dates_grouped[k] = []
+                            dates_grouped[k].append(filepath)
+                        elif is_img:
+                            stats[date_str][shift][linha]['img'] += 1
+                            total_imgs += 1
+                    except Exception:
+                        pass
     except Exception as e:
-        log_msg(f"Erro ao ler diretoria mestre {analysis_path}: {e}")
+        log_msg(f"Erro na travessia das pastas: {e}")
 
-    grouped_tasks = {}
-    for linha, dates_set in tasks.items():
-        processed = set(state["processed_dates"].get(linha, []))
-        for d_path, d_str in dates_set:
-            if d_str not in processed:
-                if linha not in grouped_tasks:
-                    grouped_tasks[linha] = {}
-                if d_str not in grouped_tasks[linha]:
-                    grouped_tasks[linha][d_str] = []
-                grouped_tasks[linha][d_str].append(d_path)
-
-    if not grouped_tasks:
+    if total_xmls == 0 and total_imgs == 0:
         analysis_status['progress'] = 100
         analysis_status['status'] = 'completed'
         analysis_status['eta'] = '00:00:00'
         analysis_status['running'] = False
-        log_msg(_t("Nenhuma data nova por analisar. Análise concluída."))
+        log_msg(_t("Nenhum ficheiro XML ou imagem encontrado nas subdiretorias."))
         return
 
     analysis_status['status'] = 'counting_files'
-    dates_grouped = {}
-    total_xmls = 0
     
-    for linha, date_dict in grouped_tasks.items():
+    # Processa os ficheiros agrupados para exibir o Log Cronológico na UI
+    sorted_dates = sorted(stats.keys())
+    for date_str in sorted_dates:
         if analysis_status['stop_flag']: break
-        for d_str, paths in date_dict.items():
-            if analysis_status['stop_flag']: break
-            k = (linha, d_str)
-            if k not in dates_grouped: dates_grouped[k] = []
+        log_msg(f"--- Dia {date_str} ---")
+        for shift in sorted(stats[date_str].keys()):
+            t_cfg = turnos_cfg.get(shift, {})
+            t_inicio = t_cfg.get('inicio', '??:??')
+            t_fim = t_cfg.get('fim', '??:??')
+            shift_label = shift.replace('turno', 'Turno ')
             
-            log_msg(f"A contar ficheiros da Linha {linha} - Dia {d_str}...")
-            for d_path in paths:
-                if analysis_status['stop_flag']: break
-                try:
-                    with os.scandir(d_path) as it:
-                        for entry in it:
-                            if entry.is_file() and entry.name.lower().endswith('.xml'):
-                                dates_grouped[k].append(entry.path)
-                                total_xmls += 1
-                    analysis_status['total_files'] = total_xmls
-                except Exception:
-                    pass
+            log_msg(f"[{shift_label} ({t_inicio} as {t_fim})]")
+            for l in sorted(stats[date_str][shift].keys()):
+                c = stats[date_str][shift][l]
+                log_msg(f"  Linha {l} - {c['img']} imagens - {c['xml']} ficheiros XML")
+    
+    log_msg(f"=== RESUMO TOTAL DOS BACKUPS ===")
+    log_msg(f"TOTAL IMAGENS: {total_imgs}")
+    log_msg(f"TOTAL XMLs: {total_xmls}")
+    log_msg(f"=================================")
 
-    if total_xmls == 0:
+    if not reset:
+        filtered_dates_grouped = {}
+        for (linha, date_str), filepaths in dates_grouped.items():
+            if date_str not in state["processed_dates"].get(linha, []):
+                filtered_dates_grouped[(linha, date_str)] = filepaths
+        dates_grouped = filtered_dates_grouped
+
+    total_xmls_to_process = sum(len(paths) for paths in dates_grouped.values())
+    analysis_status['total_files'] = total_xmls_to_process
+    
+    if total_xmls_to_process == 0:
         analysis_status['progress'] = 100
         analysis_status['status'] = 'completed'
         analysis_status['eta'] = '00:00:00'
         analysis_status['running'] = False
-        log_msg(_t("Nenhum ficheiro XML encontrado nas pastas indicadas."))
+        log_msg(_t("Nenhum ficheiro XML novo para processar (já registados)."))
         return
 
     analysis_status['status'] = 'processing'
-    log_msg(f"{_t('Descoberta concluída. Iniciando leitura rápida de')} {total_xmls} {_t('ficheiros XML...')}")
+    log_msg(f"{_t('A extrair Artigos de')} {total_xmls_to_process} {_t('novos ficheiros XML...')}")
     
     files_done = 0
     start_time = time.time()
@@ -4944,7 +2759,7 @@ def article_analysis_worker(reset=False, explicit_path=""):
         if not filepaths: continue
         
         art_counts_for_day = set()
-        log_msg(f"A ler {len(filepaths)} ficheiros (Linha {linha} - {d_str})...")
+        log_msg(f"A ler {len(filepaths)} novos ficheiros XML (Linha {linha} - {d_str})...")
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             future_to_file = {executor.submit(process_xml, fp): fp for fp in filepaths}
@@ -4955,11 +2770,11 @@ def article_analysis_worker(reset=False, explicit_path=""):
                     art_counts_for_day.add(art)
                 
                 files_done += 1
-                if files_done % 100 == 0 or files_done == total_xmls:
+                if files_done % 100 == 0 or files_done == total_xmls_to_process:
                     analysis_status['files_done'] = files_done
-                    analysis_status['progress'] = int((files_done / total_xmls) * 100)
+                    analysis_status['progress'] = int((files_done / total_xmls_to_process) * 100)
                     elapsed = time.time() - start_time
-                    eta_seconds = (elapsed / files_done) * (total_xmls - files_done)
+                    eta_seconds = (elapsed / files_done) * (total_xmls_to_process - files_done)
                     analysis_status['eta'] = format_eta(eta_seconds)
 
         if analysis_status['stop_flag']: break
@@ -5804,7 +3619,7 @@ def build_export_zip_task(task_id, export_date, selected_turnos, selected_machin
                                 files_to_zip.append((file_path, arcname))
         total_files = len(files_to_zip)
         if total_files == 0:
-            export_tasks[task_id] = {'status': 'error', 'message': 'Nenhum ficheiro encontrado para esta data/turno.', 'progress': 0}
+            export_tasks[task_id] = {'status': 'error', 'message': _t('Nenhum ficheiro encontrado para esta data/turno.'), 'progress': 0}
             return
         temp_dir = tempfile.gettempdir()
         zip_filename = os.path.join(temp_dir, f"export_{task_id}.zip")
@@ -5905,6 +3720,456 @@ def index():
 def get_config_api():
     return jsonify(load_config())
 
+@app.route('/check_path_access', methods=['POST'])
+@login_required
+def check_path_access_route():
+    data = request.get_json()
+    path = data.get('path', '')
+    accessible, error = check_path_accessible(path)
+    return jsonify({'accessible': accessible, 'error': error})
+
+@app.route('/browse_directory', methods=['POST'])
+@login_required
+def browse_directory_route():
+    data = request.get_json()
+    path = data.get('path', '')
+    return jsonify(browse_directory(path))
+
+@app.route('/save_general_config', methods=['POST'])
+@login_required
+def save_general_config():
+    try:
+        new_data = request.get_json()
+        config = load_config()
+        for k in ['ssd_path', 'mirror_source_path', 'mosaic_config_folder', 'log_file_path', 'article_analysis_path', 'mirror_include_subfolders']:
+            if k in new_data: config[k] = new_data[k]
+        if 'ssd_retention_days' in new_data: config['ssd_retention_days'] = int(new_data['ssd_retention_days'] or 5)
+        if 'hdd_retention_months' in new_data: config['hdd_retention_months'] = int(new_data['hdd_retention_months'] or 6)
+        if 'scan_interval_sec' in new_data: config['scan_interval_sec'] = int(new_data['scan_interval_sec'] or 1)
+        if 'turnos' in new_data: config['turnos'] = new_data['turnos']
+        save_config(config)
+        log_user_action(session.get('username'), "Saved general configuration")
+        return jsonify({'status': 'success', 'message': _t('Configuração geral guardada.')})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/save_pkiris_config', methods=['POST'])
+@login_required
+def save_pkiris_config():
+    try:
+        new_data = request.get_json()
+        config = load_config()
+        config['pkiris_retention_days'] = int(new_data.get('pkiris_retention_days') or 5)
+        config['pkiris_dst_root'] = new_data.get('pkiris_dst_root', '')
+        
+        for linha, maquinas in new_data.get('linhas', {}).items():
+            if linha not in config['linhas']: config['linhas'][linha] = {}
+            for maq, path in maquinas.items():
+                if maq not in config['linhas'][linha]: config['linhas'][linha][maq] = {}
+                config['linhas'][linha][maq]['pkiris_src'] = path
+                
+        save_config(config)
+        log_user_action(session.get('username'), "Saved PKIRIS configuration")
+        return jsonify({'status': 'success', 'message': _t('Configurações PKIRIS guardadas.')})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/save_historicos_config', methods=['POST'])
+@login_required
+def save_historicos_config():
+    try:
+        new_data = request.get_json()
+        config = load_config()
+        config['historicos_retention_days'] = int(new_data.get('historicos_retention_days') or 365)
+        config['historicos_dst_root'] = new_data.get('historicos_dst_root', '')
+        
+        for linha, maquinas in new_data.get('linhas', {}).items():
+            if linha not in config['linhas']: config['linhas'][linha] = {}
+            for maq, path in maquinas.items():
+                if maq not in config['linhas'][linha]: config['linhas'][linha][maq] = {}
+                config['linhas'][linha][maq]['historico_src'] = path
+                
+        save_config(config)
+        log_user_action(session.get('username'), "Saved Historicos configuration")
+        return jsonify({'status': 'success', 'message': _t('Configurações Históricos guardadas.')})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/save_artigos_config', methods=['POST'])
+@login_required
+def save_artigos_config():
+    try:
+        new_data = request.get_json()
+        config = load_config()
+        config['artigos_retention_days'] = int(new_data.get('artigos_retention_days') or 365)
+        config['artigos_dst_root'] = new_data.get('artigos_dst_root', '')
+        
+        for linha, maquinas in new_data.get('linhas', {}).items():
+            if linha not in config['linhas']: config['linhas'][linha] = {}
+            for maq, path in maquinas.items():
+                if maq not in config['linhas'][linha]: config['linhas'][linha][maq] = {}
+                config['linhas'][linha][maq]['artigo_src'] = path
+                
+        save_config(config)
+        log_user_action(session.get('username'), "Saved Artigos configuration")
+        return jsonify({'status': 'success', 'message': _t('Configurações Artigos guardadas.')})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/save_lines_config', methods=['POST'])
+@login_required
+def save_lines_config():
+    try:
+        data = request.get_json()
+        config = load_config()
+        if 'linhas' in data:
+            for linha, l_data in data['linhas'].items():
+                if linha not in config['linhas']: config['linhas'][linha] = {}
+                config['linhas'][linha]['cycle_mode_active'] = l_data.get('cycle_mode_active', False)
+                config['linhas'][linha]['cycle_time_sec'] = l_data.get('cycle_time_sec', 30)
+                config['linhas'][linha]['use_test_mode'] = l_data.get('use_test_mode', False)
+                for maq in ['lateral', 'fundo', 'lateral1', 'fundo1', 'lateral2', 'fundo2']:
+                    if maq in l_data:
+                        if maq not in config['linhas'][linha]: config['linhas'][linha][maq] = {}
+                        for k in ['src_prod', 'dst_prod', 'src_test', 'dst_test', 'delete_source', 'mosaic_port']:
+                            if k in l_data[maq]: config['linhas'][linha][maq][k] = l_data[maq][k]
+        if 'visao_global' in data:
+            config['visao_global'] = data['visao_global']
+        save_config(config)
+        log_user_action(session.get('username'), "Saved lines configuration")
+        return jsonify({'status': 'success', 'message': _t('Configurações das Linhas guardadas.')})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/save_mosaic_config', methods=['POST'])
+@login_required
+def save_mosaic_config_route():
+    try:
+        linha = request.args.get('linha', 'global')
+        data = request.get_json()
+        config = load_mosaic_config()
+        
+        if linha == 'overview_lateral': config['overview']['lateral'] = data
+        elif linha == 'overview_fundo': config['overview']['fundo'] = data
+        elif linha == 'global':
+            for k in ['xml_config', 'display_config', 'overlay_config', 'filter_config']:
+                if k in data: config[k] = data[k]
+        else:
+            if 'machines' not in config: config['machines'] = {}
+            config['machines'][linha] = data
+            
+        safe_save_json(get_mosaic_config_path(), config)
+        log_user_action(session.get('username'), f"Saved mosaic configuration for {linha}")
+        return jsonify({'status': 'success', 'message': _t('Configuração Mosaico guardada.')})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/api/mosaic_config', methods=['GET'])
+@login_required
+def get_mosaic_config():
+    linha = request.args.get('linha', 'global')
+    config = load_mosaic_config()
+    if linha == 'overview_lateral':
+        resp = config.get('overview', {}).get('lateral', {})
+        resp['all_available_machines'] = _get_all_available_machines()
+        return jsonify(resp)
+    elif linha == 'overview_fundo':
+        resp = config.get('overview', {}).get('fundo', {})
+        resp['all_available_machines'] = _get_all_available_machines()
+        return jsonify(resp)
+    elif linha == 'global':
+        return jsonify(config)
+    else:
+        return jsonify(config.get('machines', {}).get(linha, config))
+
+def _get_all_available_machines():
+    config = load_config()
+    available = {}
+    for linha, l_data in config.get('linhas', {}).items():
+        available[linha] = []
+        for maq in ['lateral', 'fundo', 'lateral1', 'fundo1', 'lateral2', 'fundo2']:
+            if maq in l_data and isinstance(l_data[maq], dict):
+                if l_data[maq].get('src_prod') or l_data[maq].get('src_test'):
+                    available[linha].append(maq)
+    return available
+
+@app.route('/analyze_xml_fields', methods=['POST'])
+@login_required
+def analyze_xml_fields():
+    data = request.get_json()
+    path = data.get('path', '')
+    if not path or not os.path.exists(path): return jsonify([])
+    fields = set()
+    count = 0
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                if count > 20: break
+                if entry.is_file() and entry.name.lower().endswith('.xml'):
+                    try:
+                        tree = ET.parse(entry.path)
+                        root = tree.getroot()
+                        for elem in root.iter(): fields.add(elem.tag)
+                        count += 1
+                    except: pass
+        return jsonify(sorted(list(fields)))
+    except: return jsonify([])
+
+@app.route('/api/get_xml_tag_values', methods=['POST'])
+@login_required
+def get_xml_tag_values():
+    data = request.get_json()
+    path = data.get('path', '')
+    tag = data.get('tag', 'NUM_CAM')
+    if not path or not os.path.exists(path): return jsonify({'values': []})
+    values = set()
+    count = 0
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                if count > 50: break
+                if entry.is_file() and entry.name.lower().endswith('.xml'):
+                    try:
+                        with open(entry.path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            m = re.search(f'<{tag}[^>]*>(.*?)</{tag}>', content, re.IGNORECASE)
+                            if m: values.add(m.group(1).strip())
+                        count += 1
+                    except: pass
+        return jsonify({'values': sorted(list(values))})
+    except: return jsonify({'values': []})
+
+@app.route('/get_machines_list')
+@login_required
+def get_machines_list():
+    config = load_config()
+    machines = []
+    for linha, l_data in config.get('linhas', {}).items():
+        for maq, m_data in l_data.items():
+            if isinstance(m_data, dict) and (m_data.get('src_prod') or m_data.get('src_test')):
+                machines.append({'key': f"{linha}_{maq}", 'linha': linha, 'maquina_display': maq.capitalize()})
+    return jsonify({'machines': machines})
+
+@app.route('/toggle_backup', methods=['POST'])
+@login_required
+def toggle_backup():
+    data = request.get_json()
+    linha = data.get('linha')
+    maquina = data.get('maquina')
+    config = load_config()
+    try:
+        current_state = config['linhas'][linha][maquina].get('backup_active', False)
+        new_state = not current_state
+        config['linhas'][linha][maquina]['backup_active'] = new_state
+        save_config(config)
+        
+        key = f"{linha}_{maquina}"
+        if new_state:
+            if key not in copy_threads or not copy_threads[key].is_alive():
+                stop_copy_flags[key] = False
+                copy_threads[key] = threading.Thread(target=copy_files_for_line, args=(linha, maquina))
+                copy_threads[key].daemon = True
+                copy_threads[key].start()
+        else:
+            stop_copy_flags[key] = True
+        
+        log_user_action(session.get('username'), f"Toggled backup for {linha}_{maquina} to {new_state}")
+        return jsonify({'status': 'success', 'active': new_state, 'message': f"{_t('Backup')} {'ativado' if new_state else 'desativado'}."})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/toggle_mosaic', methods=['POST'])
+@login_required
+def toggle_mosaic():
+    data = request.get_json()
+    linha = data.get('linha')
+    maquina = data.get('maquina')
+    config = load_config()
+    try:
+        if linha == 'Global':
+            current = config.get('visao_global', {}).get(f'mosaic_{maquina}_active', False)
+            new_state = not current
+            if 'visao_global' not in config: config['visao_global'] = {}
+            config['visao_global'][f'mosaic_{maquina}_active'] = new_state
+        else:
+            current = config['linhas'][linha][maquina].get('mosaic_active', False)
+            new_state = not current
+            config['linhas'][linha][maquina]['mosaic_active'] = new_state
+            
+        save_config(config)
+        
+        if new_state: start_mosaic_process(linha, maquina)
+        else: stop_mosaic_process(linha, maquina)
+        
+        log_user_action(session.get('username'), f"Toggled mosaic for {linha}_{maquina} to {new_state}")
+        return jsonify({'status': 'success', 'active': new_state, 'message': f"{_t('Mosaico')} {'ativado' if new_state else 'desativado'}."})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/api/mosaic_control/<action>', methods=['POST'])
+@login_required
+def api_mosaic_control(action):
+    data = request.get_json()
+    linha = data.get('linha')
+    maquina = data.get('maquina')
+    if action == 'start':
+        res = start_mosaic_process(linha, maquina)
+        return jsonify({'status': 'success' if res else 'error', 'message': _t('Iniciado') if res else _t('Erro')})
+    elif action == 'stop':
+        res = stop_mosaic_process(linha, maquina)
+        return jsonify({'status': 'success' if res else 'error', 'message': _t('Parado') if res else _t('Erro')})
+    elif action == 'restart':
+        stop_mosaic_process(linha, maquina)
+        time.sleep(1)
+        res = start_mosaic_process(linha, maquina)
+        return jsonify({'status': 'success' if res else 'error', 'message': _t('Reiniciado') if res else _t('Erro')})
+    return jsonify({'status': 'error', 'message': _t('Ação inválida')})
+
+@app.route('/api/mosaic_status')
+@login_required
+def api_mosaic_status():
+    config = load_config()
+    status_data = {}
+    for linha, l_data in config.get('linhas', {}).items():
+        for maq, m_data in l_data.items():
+            if isinstance(m_data, dict) and m_data.get('mosaic_port'):
+                key = f"{linha}_{maq}"
+                proc = mosaic_processes.get(key)
+                is_running = proc is not None and proc.poll() is None
+                status_data[key] = {
+                    'linha': linha, 'maquina': maq, 'maquina_display': maq.capitalize(),
+                    'port': m_data.get('mosaic_port'), 'is_configured': m_data.get('mosaic_active', False),
+                    'is_running': is_running, 'pid': proc.pid if is_running else None
+                }
+                
+    vg = config.get('visao_global', {})
+    if vg.get('port_lateral'):
+        k = "Global_lateral"
+        p = mosaic_processes.get(k)
+        r = p is not None and p.poll() is None
+        status_data[k] = {'linha': 'Global', 'maquina': 'lateral', 'maquina_display': 'Lateral', 'port': vg.get('port_lateral'), 'is_configured': vg.get('mosaic_lateral_active', False), 'is_running': r, 'pid': p.pid if r else None}
+    if vg.get('port_fundo'):
+        k = "Global_fundo"
+        p = mosaic_processes.get(k)
+        r = p is not None and p.poll() is None
+        status_data[k] = {'linha': 'Global', 'maquina': 'fundo', 'maquina_display': 'Fundo', 'port': vg.get('port_fundo'), 'is_configured': vg.get('mosaic_fundo_active', False), 'is_running': r, 'pid': p.pid if r else None}
+        
+    return jsonify({'mosaics': status_data})
+
+@app.route('/start_file_copying', methods=['POST'])
+@login_required
+def start_file_copying():
+    active = start_file_copying_service()
+    log_user_action(session.get('username'), "Started file copying service")
+    return jsonify({'status': 'success', 'message': f'{active} threads de cópia iniciados.'})
+
+@app.route('/start_mirror_ssd', methods=['POST'])
+@login_required
+def start_mirror_ssd():
+    res = start_mirror_ssd_service()
+    log_user_action(session.get('username'), "Started SSD mirror service")
+    return jsonify({'status': 'success' if res else 'error', 'message': _t('Mirror SSD iniciado.') if res else _t('Falha')})
+
+@app.route('/start_all', methods=['POST'])
+@login_required
+def start_all_services():
+    start_file_copying_service()
+    start_mirror_ssd_service()
+    start_all_active_mosaics()
+    start_pkiris_service()
+    start_historicos_service()
+    start_artigos_service()
+    start_public_portal()
+    start_pen_pkiris_portal()
+    log_user_action(session.get('username'), "Started ALL services")
+    return jsonify({'status': 'success', 'message': _t('Todos os serviços ativados foram iniciados.')})
+
+@app.route('/stop_all', methods=['POST'])
+@login_required
+def stop_all_services():
+    stop_file_copying_service()
+    stop_mirror_ssd_service()
+    stop_all_mosaic_processes()
+    stop_pkiris_service()
+    stop_historicos_service()
+    stop_artigos_service()
+    log_user_action(session.get('username'), "Stopped ALL services")
+    return jsonify({'status': 'success', 'message': _t('Todos os processos foram parados.')})
+
+@app.route('/stop_all_services', methods=['POST'])
+@login_required
+def stop_services_alias():
+    return stop_all_services()
+
+@app.route('/start_pkiris', methods=['POST'])
+@login_required
+def start_pkiris():
+    start_pkiris_service()
+    log_user_action(session.get('username'), "Started PKIRIS service")
+    return jsonify({'status': 'success', 'message': _t('Backup PKIRIS iniciado.')})
+
+@app.route('/stop_pkiris', methods=['POST'])
+@login_required
+def stop_pkiris():
+    stop_pkiris_service()
+    log_user_action(session.get('username'), "Stopped PKIRIS service")
+    return jsonify({'status': 'success', 'message': _t('Backup PKIRIS parado.')})
+
+@app.route('/start_historicos', methods=['POST'])
+@login_required
+def start_historicos():
+    start_historicos_service()
+    log_user_action(session.get('username'), "Started Historicos service")
+    return jsonify({'status': 'success', 'message': _t('Backup Históricos iniciado.')})
+
+@app.route('/stop_historicos', methods=['POST'])
+@login_required
+def stop_historicos():
+    stop_historicos_service()
+    log_user_action(session.get('username'), "Stopped Historicos service")
+    return jsonify({'status': 'success', 'message': _t('Backup Históricos parado.')})
+
+@app.route('/start_artigos', methods=['POST'])
+@login_required
+def start_artigos():
+    start_artigos_service()
+    log_user_action(session.get('username'), "Started Artigos service")
+    return jsonify({'status': 'success', 'message': _t('Backup Artigos iniciado.')})
+
+@app.route('/stop_artigos', methods=['POST'])
+@login_required
+def stop_artigos():
+    stop_artigos_service()
+    log_user_action(session.get('username'), "Stopped Artigos service")
+    return jsonify({'status': 'success', 'message': _t('Backup Artigos parado.')})
+
+@app.route('/copy_status')
+@login_required
+def get_copy_status():
+    active = sum(1 for t in copy_threads.values() if t.is_alive())
+    return jsonify({'running': active > 0, 'active_threads': active})
+
+@app.route('/service_status')
+@login_required
+def service_status():
+    backup_status = {}
+    for key in copy_threads:
+        backup_status[key] = copy_threads[key].is_alive() and not stop_copy_flags.get(key, False)
+        
+    mosaic_status = {}
+    for key in mosaic_processes:
+        mosaic_status[key] = {'running': mosaic_processes[key].poll() is None}
+        
+    return jsonify({
+        'backup_services': backup_status,
+        'mosaic_process_status': mosaic_status,
+        'file_copying_active': sum(1 for t in copy_threads.values() if t.is_alive()) > 0,
+        'mirror_ssd_active': mirror_thread is not None and mirror_thread.is_alive(),
+        'pkiris_active': pkiris_thread is not None and pkiris_thread.is_alive(),
+        'historicos_active': historicos_thread is not None and historicos_thread.is_alive(),
+        'artigos_active': artigos_thread is not None and artigos_thread.is_alive()
+    })
+
 def get_pkiris_stats(base_path):
     if not os.path.exists(base_path): return {"last": "N/A", "count": 0}
     count = 0
@@ -5916,842 +4181,261 @@ def get_pkiris_stats(base_path):
                     count += 1
                     if entry.stat().st_mtime > latest_time:
                         latest_time = entry.stat().st_mtime
-    except Exception:
-        pass
-    last_str = datetime.fromtimestamp(latest_time).strftime("%Y-%m-%d %H:%M") if latest_time > 0 else "N/A"
-    return {"last": last_str, "count": count}
+    except: pass
+    if latest_time == 0: return {"last": "N/A", "count": count}
+    return {"last": datetime.fromtimestamp(latest_time).strftime("%H:%M:%S"), "count": count}
 
-def get_latest_in_tree(base_path):
-    if not os.path.exists(base_path): return "N/A"
+def get_historico_stats(base_path):
+    if not os.path.exists(base_path): return {"last": "N/A"}
+    latest_time = 0
     try:
-        months = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
-        if not months: return "N/A"
-        months.sort(reverse=True)
-        latest_month = months[0]
-        
-        days_path = os.path.join(base_path, latest_month)
-        days = [d for d in os.listdir(days_path) if os.path.isdir(os.path.join(days_path, d))]
-        if not days: return "N/A"
-        days.sort(reverse=True)
-        latest_day = days[0]
-        
-        target_dir = os.path.join(days_path, latest_day)
-        latest_time = 0
-        for f in os.listdir(target_dir):
-            fp = os.path.join(target_dir, f)
-            if os.path.isfile(fp):
-                mtime = os.path.getmtime(fp)
-                if mtime > latest_time:
-                    latest_time = mtime
-        if latest_time > 0:
-            return datetime.fromtimestamp(latest_time).strftime("%Y-%m-%d %H:%M")
-        else:
-            return f"{latest_month}-{latest_day}"
-    except Exception:
-        return "N/A"
+        with os.scandir(base_path) as it:
+            for entry in it:
+                if entry.is_file():
+                    if entry.stat().st_mtime > latest_time:
+                        latest_time = entry.stat().st_mtime
+    except: pass
+    if latest_time == 0: return {"last": "N/A"}
+    return {"last": datetime.fromtimestamp(latest_time).strftime("%H:%M:%S")}
 
 @app.route('/get_line_status')
 @login_required
 def get_line_status():
     config = load_config()
-    lines_list, backup_services, mosaic_services = [], {}, {}
-    pkiris_info, historicos_info, artigos_info = {}, {}, {}
+    lines_info = []
     
-    pkiris_root = config.get('pkiris_dst_root', '')
-    historicos_root = config.get('historicos_dst_root', '')
-    artigos_root = config.get('artigos_dst_root', '')
+    backup_srv = {k: v.is_alive() for k, v in copy_threads.items()}
+    mosaic_srv = {k: v.poll() is None for k, v in mosaic_processes.items()}
     
-    pkiris_active_global = pkiris_thread and pkiris_thread.is_alive()
-    historicos_active_global = historicos_thread and historicos_thread.is_alive()
-    artigos_active_global = artigos_thread and artigos_thread.is_alive()
-
-    for linha, l_config in config.get('linhas', {}).items():
-        for maquina, m_config in l_config.items():
-            if not isinstance(m_config, dict): continue
-            key = f"{linha}_{maquina}"
-            lines_list.append({'linha': linha, 'maquina': maquina, 'maquina_display': _t(maquina.capitalize()), 'key': key})
-            backup_services[key] = m_config.get('backup_active', False) and (key in copy_threads and copy_threads[key].is_alive())
-            mosaic_services[key] = m_config.get('mosaic_active', False) and (key in mosaic_processes and mosaic_processes[key].poll() is None)
-            
-            safe_maq = maquina.replace(" ", "_").capitalize()
-            
-            # Info PKIRIS
-            if pkiris_root and m_config.get('pkiris_src'):
-                p_path = os.path.join(pkiris_root, f"Linha_{linha}", safe_maq)
-                stats = get_pkiris_stats(p_path)
-                pkiris_info[key] = {'active': pkiris_active_global, 'last': stats['last'], 'count': stats['count']}
-            else:
-                pkiris_info[key] = {'active': False, 'last': 'N/A', 'count': 0}
+    pkiris_info = {}
+    historicos_info = {}
+    artigos_info = {}
+    
+    pk_root = config.get('pkiris_dst_root', '')
+    hist_root = config.get('historicos_dst_root', '')
+    art_root = config.get('artigos_dst_root', '')
+    
+    for linha, l_data in config.get('linhas', {}).items():
+        for maq, m_data in l_data.items():
+            if isinstance(m_data, dict) and (m_data.get('src_prod') or m_data.get('src_test')):
+                key = f"{linha}_{maq}"
+                lines_info.append({'key': key, 'linha': linha, 'maquina': maq, 'maquina_display': maq.capitalize()})
                 
-            # Info Históricos
-            if historicos_root and m_config.get('historico_src'):
-                h_path = os.path.join(historicos_root, f"Linha_{linha}", safe_maq)
-                latest_h = get_latest_in_tree(h_path)
-                historicos_info[key] = {'active': historicos_active_global, 'last': latest_h}
-            else:
-                historicos_info[key] = {'active': False, 'last': 'N/A'}
-                
-            # Info Artigos
-            if artigos_root and m_config.get('artigo_src'):
-                a_path = os.path.join(artigos_root, f"Linha_{linha}", safe_maq)
-                latest_a = get_latest_in_tree(a_path)
-                artigos_info[key] = {'active': artigos_active_global, 'last': latest_a}
-            else:
-                artigos_info[key] = {'active': False, 'last': 'N/A'}
+                if pk_root:
+                    safe_maq = maq.replace(" ", "_").capitalize()
+                    p_path = os.path.join(pk_root, f"Linha_{linha}", safe_maq)
+                    pkiris_info[key] = get_pkiris_stats(p_path)
+                    pkiris_info[key]['active'] = bool(pkiris_thread and pkiris_thread.is_alive() and m_data.get('pkiris_src'))
+                    
+                if hist_root:
+                    safe_maq = maq.replace(" ", "_").capitalize()
+                    now = datetime.now()
+                    h_path = os.path.join(hist_root, f"Linha_{linha}", safe_maq, now.strftime("%Y-%m"), now.strftime("%d"))
+                    historicos_info[key] = get_historico_stats(h_path)
+                    historicos_info[key]['active'] = bool(historicos_thread and historicos_thread.is_alive() and m_data.get('historico_src'))
+                    
+                if art_root:
+                    safe_maq = maq.replace(" ", "_").capitalize()
+                    now = datetime.now()
+                    a_path = os.path.join(art_root, f"Linha_{linha}", safe_maq, now.strftime("%Y-%m"), now.strftime("%d"))
+                    artigos_info[key] = get_historico_stats(a_path)
+                    artigos_info[key]['active'] = bool(artigos_thread and artigos_thread.is_alive() and m_data.get('artigo_src'))
 
+    with counters_lock:
+        shift_cpy = {k: dict(v) for k, v in files_copied_shift.items()}
+        day_cpy = {k: dict(v) for k, v in files_copied_day.items()}
+        
     return jsonify({
-        'lines': lines_list,
-        'backup_services': backup_services,
-        'mosaic_services': mosaic_services,
+        'lines': lines_info,
+        'backup_services': backup_srv,
+        'mosaic_services': mosaic_srv,
+        'shift_counters': shift_cpy,
+        'day_counters': day_cpy,
         'pkiris_info': pkiris_info,
         'historicos_info': historicos_info,
-        'artigos_info': artigos_info,
-        'shift_counters': files_copied_shift,
-        'day_counters': files_copied_day
+        'artigos_info': artigos_info
     })
-
-@app.route('/service_status')
-@login_required
-def service_status():
-    config = load_config()
-    backup_services = {}
-    mosaic_process_status = {}
-    
-    for linha, linha_config in config.get('linhas', {}).items():
-        for maquina, m_cfg in linha_config.items():
-            if not isinstance(m_cfg, dict): continue
-            key = f"{linha}_{maquina}"
-            backup_services[key] = m_cfg.get('backup_active', False) and (key in copy_threads and copy_threads[key].is_alive())
-            mosaic_process_status[key] = {'running': (key in mosaic_processes and mosaic_processes[key].poll() is None)}
-            
-    vg_cfg = config.get('visao_global', {})
-    mosaic_process_status['Global_lateral'] = {'running': ('Global_lateral' in mosaic_processes and mosaic_processes['Global_lateral'].poll() is None)}
-    mosaic_process_status['Global_fundo'] = {'running': ('Global_fundo' in mosaic_processes and mosaic_processes['Global_fundo'].poll() is None)}
-
-    return jsonify({
-        'backup_services': backup_services,
-        'mosaic_process_status': mosaic_process_status,
-        'file_copying_active': any(t.is_alive() for t in copy_threads.values()),
-        'mirror_ssd_active': mirror_thread.is_alive() if mirror_thread else False,
-        'pkiris_active': pkiris_thread.is_alive() if pkiris_thread else False,
-        'historicos_active': historicos_thread.is_alive() if historicos_thread else False,
-        'artigos_active': artigos_thread.is_alive() if artigos_thread else False
-    })
-
-@app.route('/toggle_backup', methods=['POST'])
-@login_required
-def toggle_backup():
-    data = request.get_json()
-    linha, maquina = data.get('linha'), data.get('maquina')
-    key = f"{linha}_{maquina}"
-    config = load_config()
-    
-    if linha in config['linhas'] and maquina in config['linhas'][linha]:
-        current_state = config['linhas'][linha][maquina].get('backup_active', False)
-        new_state = not current_state
-        config['linhas'][linha][maquina]['backup_active'] = new_state
-        save_config(config)
-        
-        if new_state:
-            if key not in copy_threads or not copy_threads[key].is_alive():
-                stop_copy_flags[key] = False
-                copy_threads[key] = threading.Thread(target=copy_files_for_line, args=(linha, maquina))
-                copy_threads[key].daemon = True
-                copy_threads[key].start()
-        else:
-            if key in copy_threads:
-                stop_copy_flags[key] = True
-                
-        log_user_action(session.get('username'), f"Toggled backup for {linha}/{maquina} to {new_state}")
-        return jsonify({'status': 'success', 'message': f'Backup da linha {linha} ({maquina}) {"ativado" if new_state else "desativado"}.', 'active': new_state})
-    return jsonify({'status': 'error', 'message': 'Linha ou máquina não encontrada.'})
-
-@app.route('/toggle_mosaic', methods=['POST'])
-@login_required
-def toggle_mosaic():
-    data = request.get_json()
-    linha, maquina = data.get('linha'), data.get('maquina')
-    config = load_config()
-    
-    if linha == 'Global':
-        current_state = config.get('visao_global', {}).get(f'mosaic_{maquina}_active', False)
-        new_state = not current_state
-        if 'visao_global' not in config: config['visao_global'] = {}
-        config['visao_global'][f'mosaic_{maquina}_active'] = new_state
-        save_config(config)
-        
-        if new_state: start_mosaic_process(linha, maquina)
-        else: stop_mosaic_process(linha, maquina)
-        
-        log_user_action(session.get('username'), f"Toggled Visão Global {maquina} to {new_state}")
-        return jsonify({'status': 'success', 'message': f'Visão Global {maquina} {"ativado" if new_state else "desativado"}.', 'active': new_state})
-        
-    elif linha in config['linhas'] and maquina in config['linhas'][linha]:
-        current_state = config['linhas'][linha][maquina].get('mosaic_active', False)
-        new_state = not current_state
-        config['linhas'][linha][maquina]['mosaic_active'] = new_state
-        save_config(config)
-        
-        if new_state: start_mosaic_process(linha, maquina)
-        else: stop_mosaic_process(linha, maquina)
-        
-        log_user_action(session.get('username'), f"Toggled mosaico for {linha}/{maquina} to {new_state}")
-        return jsonify({'status': 'success', 'message': f'Mosaico da linha {linha} ({maquina}) {"ativado" if new_state else "desativado"}.', 'active': new_state})
-        
-    return jsonify({'status': 'error', 'message': 'Linha ou máquina não encontrada.'})
-
-@app.route('/api/mosaic_control/<action>', methods=['POST'])
-@login_required
-def api_mosaic_control(action):
-    data = request.get_json()
-    linha, maquina = data.get('linha'), data.get('maquina')
-    
-    if action == 'start':
-        success = start_mosaic_process(linha, maquina)
-        msg = f"Mosaico {linha}/{maquina} iniciado." if success else "Falha ao iniciar."
-    elif action == 'stop':
-        success = stop_mosaic_process(linha, maquina)
-        msg = f"Mosaico {linha}/{maquina} parado." if success else "Falha ao parar."
-    elif action == 'restart':
-        stop_mosaic_process(linha, maquina)
-        time.sleep(1)
-        success = start_mosaic_process(linha, maquina)
-        msg = f"Mosaico {linha}/{maquina} reiniciado." if success else "Falha ao reiniciar."
-    else:
-        return jsonify({'status': 'error', 'message': 'Ação inválida.'})
-        
-    log_user_action(session.get('username'), f"Mosaic {action} for {linha}/{maquina}")
-    return jsonify({'status': 'success' if success else 'error', 'message': msg})
-
-@app.route('/api/mosaic_status')
-@login_required
-def get_mosaic_status():
-    config = load_config()
-    status_data = {}
-    
-    for linha, l_cfg in config.get('linhas', {}).items():
-        for maq, m_cfg in l_cfg.items():
-            if not isinstance(m_cfg, dict): continue
-            key = f"{linha}_{maq}"
-            port = m_cfg.get('mosaic_port', 0)
-            is_configured = m_cfg.get('mosaic_active', False)
-            is_running = key in mosaic_processes and mosaic_processes[key].poll() is None
-            pid = mosaic_processes[key].pid if is_running else None
-            
-            if port > 0 or is_configured or is_running:
-                status_data[key] = {
-                    'linha': linha, 'maquina': maq, 'maquina_display': _t(maq.capitalize()),
-                    'port': port, 'is_configured': is_configured, 'is_running': is_running, 'pid': pid
-                }
-                
-    vg_cfg = config.get('visao_global', {})
-    for maq in ['lateral', 'fundo']:
-        key = f"Global_{maq}"
-        port = vg_cfg.get(f'port_{maq}', 0)
-        is_configured = vg_cfg.get(f'mosaic_{maq}_active', False)
-        is_running = key in mosaic_processes and mosaic_processes[key].poll() is None
-        pid = mosaic_processes[key].pid if is_running else None
-        
-        status_data[key] = {
-            'linha': 'Global', 'maquina': maq, 'maquina_display': f"Visão {_t(maq.capitalize())}",
-            'port': port, 'is_configured': is_configured, 'is_running': is_running, 'pid': pid
-        }
-        
-    return jsonify({'mosaics': status_data})
-
-@app.route('/api/mosaic_config')
-@login_required
-def api_get_mosaic_config():
-    linha = request.args.get('linha', 'global')
-    cfg = load_mosaic_config()
-    
-    if linha.startswith('overview_'):
-        maq = linha.split('_')[1]
-        ov_cfg = cfg.get('overview', {}).get(maq, {})
-        ov_cfg['all_available_machines'] = {}
-        main_cfg = load_config()
-        for l, lcfg in main_cfg.get('linhas', {}).items():
-            ov_cfg['all_available_machines'][l] = []
-            for m, mcfg in lcfg.items():
-                if isinstance(mcfg, dict) and m == maq:
-                    ov_cfg['all_available_machines'][l].append(m)
-                elif isinstance(mcfg, dict) and l == '34' and m.startswith(maq):
-                    ov_cfg['all_available_machines'][l].append(m)
-        return jsonify(ov_cfg)
-        
-    if linha == 'global':
-        return jsonify(cfg)
-        
-    if 'linhas' in cfg and linha in cfg['linhas']:
-        return jsonify(cfg['linhas'][linha])
-        
-    return jsonify(cfg)
-
-@app.route('/save_mosaic_config', methods=['POST'])
-@login_required
-def save_mosaic_config():
-    data = request.get_json()
-    linha = request.args.get('linha', 'global')
-    cfg = load_mosaic_config()
-    
-    if linha.startswith('overview_'):
-        maq = linha.split('_')[1]
-        if 'overview' not in cfg: cfg['overview'] = {}
-        if maq not in cfg['overview']: cfg['overview'][maq] = {}
-        
-        cfg['overview'][maq]['orientation'] = data.get('orientation', 0)
-        cfg['overview'][maq]['layout'] = data.get('layout', 'horizontal')
-        cfg['overview'][maq]['max_images'] = data.get('max_images', 8)
-        cfg['overview'][maq]['active_machines'] = data.get('active_machines', {})
-    elif linha == 'global':
-        for key in ['xml_config', 'display_config', 'overlay_config', 'filter_config']:
-            if key in data: cfg[key] = data[key]
-    else:
-        if 'linhas' not in cfg: cfg['linhas'] = {}
-        if linha not in cfg['linhas']: cfg['linhas'][linha] = {}
-        for key in ['xml_config', 'display_config', 'overlay_config', 'filter_config']:
-            if key in data: 
-                cfg['linhas'][linha][key] = data[key]
-
-    if safe_save_json(get_mosaic_config_path(), cfg):
-        log_user_action(session.get('username'), f"Saved mosaic config for {linha}")
-        return jsonify({'status': 'success', 'message': 'Configuração do mosaico salva com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Erro ao salvar configuração do mosaico.'})
-
-@app.route('/analyze_xml_fields', methods=['POST'])
-@login_required
-def analyze_xml_fields():
-    data = request.get_json()
-    path = data.get('path', '')
-    if not path or not os.path.exists(path):
-        return jsonify({'error': 'Caminho inválido ou não existe.'}), 400
-        
-    found_fields = set()
-    files_scanned = 0
-    try:
-        for root, dirs, files in os.walk(path):
-            for file in files:
-                if file.lower().endswith('.xml'):
-                    try:
-                        tree = ET.parse(os.path.join(root, file))
-                        for elem in tree.iter():
-                            found_fields.add(elem.tag)
-                        files_scanned += 1
-                        if files_scanned >= 5: return jsonify(list(found_fields))
-                    except Exception: pass
-            if files_scanned >= 5: break
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-        
-    return jsonify(list(found_fields))
-
-@app.route('/api/get_xml_tag_values', methods=['POST'])
-@login_required
-def get_xml_tag_values():
-    data = request.get_json()
-    path = data.get('path', '')
-    tag = data.get('tag', 'NUM_CAM')
-    if not path or not os.path.exists(path):
-        return jsonify({'error': 'Caminho inválido'}), 400
-        
-    found_values = set()
-    files_scanned = 0
-    max_files = 100
-    try:
-        for root, dirs, files in os.walk(path):
-            for file in files:
-                if file.lower().endswith('.xml'):
-                    try:
-                        tree = ET.parse(os.path.join(root, file))
-                        for elem in tree.iter(tag):
-                            if elem.text: found_values.add(elem.text.strip())
-                        files_scanned += 1
-                        if files_scanned >= max_files: return jsonify({'values': list(found_values)})
-                    except Exception: pass
-            if files_scanned >= max_files: break
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-        
-    return jsonify({'values': list(found_values)})
-
-@app.route('/save_pkiris_config', methods=['POST'])
-@login_required
-def save_pkiris_config():
-    data = request.get_json()
-    config = load_config()
-    config['pkiris_retention_days'] = int(data.get('pkiris_retention_days', 5))
-    config['pkiris_dst_root'] = data.get('pkiris_dst_root', '')
-    
-    if 'linhas' not in config: config['linhas'] = {}
-    for linha, l_data in data.get('linhas', {}).items():
-        if linha not in config['linhas']: config['linhas'][linha] = {}
-        for maq, src in l_data.items():
-            if maq not in config['linhas'][linha]: config['linhas'][linha][maq] = {}
-            config['linhas'][linha][maq]['pkiris_src'] = src
-            
-    if save_config(config):
-        return jsonify({'status': 'success', 'message': 'Configuração PKIRIS guardada com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Erro ao guardar configuração.'})
-
-@app.route('/save_historicos_config', methods=['POST'])
-@login_required
-def save_historicos_config():
-    data = request.get_json()
-    config = load_config()
-    config['historicos_retention_days'] = int(data.get('historicos_retention_days', 365))
-    config['historicos_dst_root'] = data.get('historicos_dst_root', '')
-    
-    if 'linhas' not in config: config['linhas'] = {}
-    for linha, l_data in data.get('linhas', {}).items():
-        if linha not in config['linhas']: config['linhas'][linha] = {}
-        for maq, src in l_data.items():
-            if maq not in config['linhas'][linha]: config['linhas'][linha][maq] = {}
-            config['linhas'][linha][maq]['historico_src'] = src
-            
-    if save_config(config):
-        return jsonify({'status': 'success', 'message': 'Configuração Históricos guardada com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Erro ao guardar configuração.'})
-
-@app.route('/save_artigos_config', methods=['POST'])
-@login_required
-def save_artigos_config():
-    data = request.get_json()
-    config = load_config()
-    config['artigos_retention_days'] = int(data.get('artigos_retention_days', 365))
-    config['artigos_dst_root'] = data.get('artigos_dst_root', '')
-    
-    if 'linhas' not in config: config['linhas'] = {}
-    for linha, l_data in data.get('linhas', {}).items():
-        if linha not in config['linhas']: config['linhas'][linha] = {}
-        for maq, src in l_data.items():
-            if maq not in config['linhas'][linha]: config['linhas'][linha][maq] = {}
-            config['linhas'][linha][maq]['artigo_src'] = src
-            
-    if save_config(config):
-        return jsonify({'status': 'success', 'message': 'Configuração Artigos guardada com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Erro ao guardar configuração.'})
-
-@app.route('/start_pkiris', methods=['POST'])
-@login_required
-def start_pkiris():
-    if start_pkiris_service():
-        return jsonify({'status': 'success', 'message': 'Serviço PKIRIS iniciado com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Falha ao iniciar o serviço.'})
-
-@app.route('/stop_pkiris', methods=['POST'])
-@login_required
-def stop_pkiris():
-    stop_pkiris_service()
-    return jsonify({'status': 'success', 'message': 'Serviço PKIRIS parado.'})
-
-@app.route('/start_historicos', methods=['POST'])
-@login_required
-def start_historicos():
-    if start_historicos_service():
-        return jsonify({'status': 'success', 'message': 'Serviço Históricos iniciado com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Falha ao iniciar o serviço.'})
-
-@app.route('/stop_historicos', methods=['POST'])
-@login_required
-def stop_historicos():
-    stop_historicos_service()
-    return jsonify({'status': 'success', 'message': 'Serviço Históricos parado.'})
-
-@app.route('/start_artigos', methods=['POST'])
-@login_required
-def start_artigos():
-    if start_artigos_service():
-        return jsonify({'status': 'success', 'message': 'Serviço Artigos iniciado com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Falha ao iniciar o serviço.'})
-
-@app.route('/stop_artigos', methods=['POST'])
-@login_required
-def stop_artigos():
-    stop_artigos_service()
-    return jsonify({'status': 'success', 'message': 'Serviço Artigos parado.'})
-
-@app.route('/save_general_config', methods=['POST'])
-@login_required
-def save_general_config():
-    data = request.get_json()
-    config = load_config()
-    
-    config['ssd_path'] = data.get('ssd_path', config.get('ssd_path', ''))
-    config['mirror_source_path'] = data.get('mirror_source_path', config.get('mirror_source_path', ''))
-    config['mosaic_config_folder'] = data.get('mosaic_config_folder', config.get('mosaic_config_folder', ''))
-    config['article_analysis_path'] = data.get('article_analysis_path', config.get('article_analysis_path', ''))
-    config['log_file_path'] = data.get('log_file_path', config.get('log_file_path', ''))
-    config['mirror_include_subfolders'] = data.get('mirror_include_subfolders', config.get('mirror_include_subfolders', True))
-    config['ssd_retention_days'] = int(data.get('ssd_retention_days', config.get('ssd_retention_days', 5)))
-    config['hdd_retention_months'] = int(data.get('hdd_retention_months', config.get('hdd_retention_months', 6)))
-    config['scan_interval_sec'] = int(data.get('scan_interval_sec', config.get('scan_interval_sec', 1)))
-    config['turnos'] = data.get('turnos', config.get('turnos', {}))
-
-    if save_config(config):
-        log_user_action(session.get('username'), "Saved general configuration")
-        return jsonify({'status': 'success', 'message': 'Configuração geral salva com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Erro ao salvar configuração geral.'})
-
-@app.route('/save_lines_config', methods=['POST'])
-@login_required
-def save_lines_config():
-    data = request.get_json()
-    config = load_config()
-    config['linhas'] = data.get('linhas', {})
-    config['visao_global'] = data.get('visao_global', {})
-    if save_config(config):
-        log_user_action(session.get('username'), "Saved lines configuration")
-        return jsonify({'status': 'success', 'message': 'Configurações das linhas e visão global salvas com sucesso.'})
-    return jsonify({'status': 'error', 'message': 'Erro ao salvar configurações.'})
-
-@app.route('/start_file_copying', methods=['POST'])
-@login_required
-def start_file_copying_route():
-    active_count = start_file_copying_service()
-    log_user_action(session.get('username'), f"Started file copying ({active_count} threads)")
-    return jsonify({'status': 'success', 'message': f'Processos de cópia iniciados ({active_count} threads ativas).'})
-
-@app.route('/start_mirror_ssd', methods=['POST'])
-@login_required
-def start_mirror_ssd_route():
-    start_mirror_ssd_service()
-    log_user_action(session.get('username'), "Started SSD mirror")
-    return jsonify({'status': 'success', 'message': 'Serviço de Mirror SSD iniciado.'})
-
-@app.route('/stop_all_services', methods=['POST'])
-@login_required
-def stop_all_services_route():
-    stop_file_copying_service()
-    stop_mirror_ssd_service()
-    stop_all_mosaic_processes()
-    stop_pkiris_service()
-    stop_historicos_service()
-    stop_artigos_service()
-    log_user_action(session.get('username'), "Stopped all services manually")
-    return jsonify({'status': 'success', 'message': 'Todos os serviços (Cópia, Mirror, Mosaicos, Backups extra) foram parados.'})
-
-@app.route('/start_all', methods=['POST'])
-@login_required
-def start_all_route():
-    start_file_copying_service()
-    start_mirror_ssd_service()
-    start_all_active_mosaics()
-    start_public_portal()
-    start_pkiris_service()
-    start_historicos_service()
-    start_artigos_service()
-    log_user_action(session.get('username'), "Started ALL services globally")
-    return jsonify({'status': 'success', 'message': 'Todos os serviços configurados foram iniciados!'})
-
-@app.route('/stop_all', methods=['POST'])
-@login_required
-def stop_all_route():
-    stop_file_copying_service()
-    stop_mirror_ssd_service()
-    stop_all_mosaic_processes()
-    stop_public_portal()
-    stop_pkiris_service()
-    stop_historicos_service()
-    stop_artigos_service()
-    log_user_action(session.get('username'), "Stopped ALL services globally")
-    return jsonify({'status': 'success', 'message': 'Absolutamente todos os serviços foram encerrados.'})
-
-@app.route('/copy_status')
-@login_required
-def copy_status():
-    active_threads = sum(1 for t in copy_threads.values() if t.is_alive())
-    return jsonify({'running': active_threads > 0, 'active_threads': active_threads})
 
 @app.route('/diagnostics')
 @login_required
 def diagnostics():
     config = load_config()
-    vol1_path = config.get('mirror_source_path', '/volume1')
-    vol2_path = config.get('ssd_path', '/volume2')
+    ssd_path = config.get('ssd_path', '/volume2/ssd_mirror')
+    v1_path = config.get('mirror_source_path', '/volume1/inspecao_organizadas')
     
-    sys_info = {
-        'storage': {'volume1': get_disk_usage(vol1_path), 'volume2': get_disk_usage(vol2_path)},
-        'system': {'cpu_percent': psutil.cpu_percent(), 'memory_percent': psutil.virtual_memory().percent},
+    with counters_lock:
+        ts_jpg = sum(v.get('jpg', 0) for v in files_copied_shift.values())
+        ts_xml = sum(v.get('xml', 0) for v in files_copied_shift.values())
+        td_jpg = sum(v.get('jpg', 0) for v in files_copied_day.values())
+        td_xml = sum(v.get('xml', 0) for v in files_copied_day.values())
+        
+    return jsonify({
         'current_shift': get_current_shift(),
+        'storage': { 'volume1': get_disk_usage(v1_path), 'volume2': get_disk_usage(ssd_path) },
+        'system': { 'cpu_percent': psutil.cpu_percent(interval=0.1), 'memory_percent': psutil.virtual_memory().percent },
+        'total_shift_jpg': ts_jpg, 'total_shift_xml': ts_xml,
+        'total_day_jpg': td_jpg, 'total_day_xml': td_xml,
         'services': {
-            'Copy_Threads': any(t.is_alive() for t in copy_threads.values()),
-            'Mirror_SSD': mirror_thread.is_alive() if mirror_thread else False,
-            'Mosaic_Count': sum(1 for p in mosaic_processes.values() if p.poll() is None),
-            'Public_Portal': public_portal_process.poll() is None if public_portal_process else False,
-            'Pen_Pkiris': pen_pkiris_process.poll() is None if pen_pkiris_process else False,
-            'PKIRIS_Backup': pkiris_thread.is_alive() if pkiris_thread else False,
-            'Historicos_Backup': historicos_thread.is_alive() if historicos_thread else False,
-            'Artigos_Backup': artigos_thread.is_alive() if artigos_thread else False
+            'Backup Principal': sum(1 for t in copy_threads.values() if t.is_alive()) > 0,
+            'Mirror SSD': mirror_thread is not None and mirror_thread.is_alive(),
+            'Mosaicos': sum(1 for p in mosaic_processes.values() if p.poll() is None) > 0,
+            'PKIRIS': pkiris_thread is not None and pkiris_thread.is_alive(),
+            'Históricos': historicos_thread is not None and historicos_thread.is_alive(),
+            'Artigos': artigos_thread is not None and artigos_thread.is_alive()
         }
-    }
-    
-    total_shift_jpg = sum(stats.get('jpg', 0) for stats in files_copied_shift.values())
-    total_shift_xml = sum(stats.get('xml', 0) for stats in files_copied_shift.values())
-    total_day_jpg = sum(stats.get('jpg', 0) for stats in files_copied_day.values())
-    total_day_xml = sum(stats.get('xml', 0) for stats in files_copied_day.values())
-    
-    sys_info['total_shift_jpg'] = total_shift_jpg
-    sys_info['total_shift_xml'] = total_shift_xml
-    sys_info['total_day_jpg'] = total_day_jpg
-    sys_info['total_day_xml'] = total_day_xml
-    
-    return jsonify(sys_info)
-
-# --- SISTEMA DINÂMICO DE LOGS ---
-@app.route('/api/log_files')
-@login_required
-def api_log_files():
-    try:
-        log_files = []
-        for root, dirs, files in os.walk(BASE_LOG_PATH):
-            for file in files:
-                if file.endswith('.log'):
-                    log_files.append(file)
-        
-        log_files = list(set(log_files))
-        log_files.sort()
-        
-        if 'backup_server.log' in log_files:
-            log_files.remove('backup_server.log')
-            log_files.insert(0, 'backup_server.log')
-            
-        return jsonify({'files': log_files})
-    except Exception as e:
-        return jsonify({'files': []})
-
-@app.route('/logs')
-@login_required
-def get_logs():
-    try:
-        file_name = request.args.get('file', 'backup_server.log')
-        if '..' in file_name or '/' in file_name or '\\' in file_name:
-            return jsonify({'logs': ['Nome de ficheiro inválido por segurança.']}), 400
-            
-        target_path = None
-        for root, dirs, files in os.walk(BASE_LOG_PATH):
-            if file_name in files:
-                target_path = os.path.join(root, file_name)
-                break
-                
-        if target_path and os.path.exists(target_path):
-            with open(target_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            return jsonify({'logs': lines[-500:]}) 
-        return jsonify({'logs': ['Ficheiro de log não encontrado.']})
-    except Exception as e:
-        return jsonify({'logs': [f'Erro ao ler log: {str(e)}']}), 500
-
-@app.route('/clear_logs', methods=['POST'])
-@login_required
-def clear_logs():
-    try:
-        data = request.get_json()
-        file_name = data.get('file', 'backup_server.log')
-        if '..' in file_name or '/' in file_name or '\\' in file_name:
-            return jsonify({'status': 'error', 'message': 'Nome de ficheiro inválido.'})
-            
-        target_path = None
-        for root, dirs, files in os.walk(BASE_LOG_PATH):
-            if file_name in files:
-                target_path = os.path.join(root, file_name)
-                break
-                
-        if target_path and os.path.exists(target_path):
-            with open(target_path, 'w', encoding='utf-8') as f:
-                f.write('')
-            log_user_action(session.get('username'), f"Limpou o ficheiro de log: {file_name}")
-            return jsonify({'status': 'success', 'message': 'Log limpo com sucesso.'})
-        return jsonify({'status': 'error', 'message': 'Arquivo de log não encontrado.'})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': f'Erro ao limpar logs: {str(e)}'})
-
-@app.route('/download_logs')
-@login_required
-def download_logs():
-    file_name = request.args.get('file', 'backup_server.log')
-    if '..' in file_name or '/' in file_name or '\\' in file_name:
-        return "Nome de ficheiro inválido", 400
-        
-    target_path = None
-    for root, dirs, files in os.walk(BASE_LOG_PATH):
-        if file_name in files:
-            target_path = os.path.join(root, file_name)
-            break
-            
-    if target_path and os.path.exists(target_path):
-        log_user_action(session.get('username'), f"Fez o download do log: {file_name}")
-        return send_file(target_path, as_attachment=True)
-    return "Log file not found", 404
+    })
 
 @app.route('/list_directories')
 @login_required
 def list_directories():
-    config = load_config()
-    dirs = set()
-    for l_cfg in config.get('linhas', {}).values():
-        for m_cfg in l_cfg.values():
-            if isinstance(m_cfg, dict) and m_cfg.get('dst'):
-                if os.path.exists(m_cfg['dst']):
-                    try:
-                        for d in os.listdir(m_cfg['dst']):
-                            if os.path.isdir(os.path.join(m_cfg['dst'], d)):
-                                dirs.add(f"{m_cfg['dst']}/{d}")
-                    except: pass
-    return jsonify({'directories': sorted(list(dirs))})
+    try:
+        config = load_config()
+        v1_path = config.get('mirror_source_path', '/volume1/inspecao_organizadas')
+        if not os.path.exists(v1_path): return jsonify({'directories': []})
+        dirs = [d.name for d in os.scandir(v1_path) if d.is_dir()]
+        return jsonify({'directories': sorted(dirs)})
+    except:
+        return jsonify({'directories': []})
 
 @app.route('/connected_ips')
 @login_required
 def connected_ips():
     return jsonify({'ips': get_connected_ips()})
 
-@app.route('/browse_directory', methods=['POST'])
-@login_required
-def browse_directory_route():
-    data = request.get_json()
-    path = data.get('path', '/')
-    return jsonify(browse_directory(path))
-
-@app.route('/check_path_access', methods=['POST'])
-@login_required
-def check_path_access_route():
-    data = request.get_json()
-    path = data.get('path', '')
-    accessible, error = check_path_accessible(path)
-    return jsonify({'accessible': accessible, 'error': error})
-
-@app.route('/get_machines_list')
-@login_required
-def get_machines_list():
-    config = load_config()
-    machines = []
-    for linha, l_cfg in config.get('linhas', {}).items():
-        for maq, m_cfg in l_cfg.items():
-            if isinstance(m_cfg, dict):
-                machines.append({'key': f"{linha}_{maq}", 'linha': linha, 'maquina': maq, 'maquina_display': _t(maq.capitalize())})
-    return jsonify({'machines': machines})
-
 @app.route('/api/users')
 @login_required
-def api_get_users():
-    if not session.get('is_dev'): return jsonify({'status': 'error', 'message': 'Acesso negado.'}), 403
+def api_users():
+    if not session.get('is_dev'): return jsonify({'status': 'error', 'message': _t('Acesso negado.')})
     users = load_users()
-    user_list = [{'username': u, 'is_dev': d.get('is_dev', False)} for u, d in users.items()]
+    user_list = [{'username': u, 'is_dev': data.get('is_dev', False)} for u, data in users.items()]
     return jsonify({'users': user_list})
 
 @app.route('/api/users/create', methods=['POST'])
 @login_required
-def api_create_user():
-    if not session.get('is_dev'): return jsonify({'status': 'error', 'message': 'Acesso negado.'}), 403
+def create_user():
+    if not session.get('is_dev'): return jsonify({'status': 'error', 'message': _t('Acesso negado.')})
     data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    if not username or not password: return jsonify({'status': 'error', 'message': 'Dados incompletos.'})
     users = load_users()
-    if username in users: return jsonify({'status': 'error', 'message': 'Utilizador já existe.'})
-    users[username] = {'password': generate_password_hash(password), 'is_dev': False}
+    if data['username'] in users: return jsonify({'status': 'error', 'message': _t('Utilizador já existe.')})
+    users[data['username']] = {'password': generate_password_hash(data['password']), 'is_dev': False}
     save_users(users)
-    log_user_action(session.get('username'), f"Created new user: {username}")
-    return jsonify({'status': 'success', 'message': 'Utilizador criado.'})
-
-@app.route('/api/users/change_password', methods=['POST'])
-@login_required
-def api_change_password():
-    data = request.get_json()
-    username = session['username']
-    current_pwd = data.get('current_password')
-    new_pwd = data.get('new_password')
-    users = load_users()
-    if not session.get('is_dev'):
-        if not check_password_hash(users[username]['password'], current_pwd):
-            return jsonify({'status': 'error', 'message': 'Password atual incorreta.'})
-    users[username]['password'] = generate_password_hash(new_pwd)
-    save_users(users)
-    log_user_action(username, "Changed own password")
-    return jsonify({'status': 'success', 'message': 'Password alterada.'})
+    log_user_action(session.get('username'), f"Created user {data['username']}")
+    return jsonify({'status': 'success', 'message': _t('Utilizador criado.')})
 
 @app.route('/api/users/delete', methods=['POST'])
 @login_required
-def api_delete_user():
-    if not session.get('is_dev'): return jsonify({'status': 'error', 'message': 'Acesso negado.'}), 403
+def delete_user():
+    if not session.get('is_dev'): return jsonify({'status': 'error', 'message': _t('Acesso negado.')})
     data = request.get_json()
-    username = data.get('username')
-    if username == 'cid': return jsonify({'status': 'error', 'message': 'Não pode apagar o utilizador root.'})
+    u = data.get('username')
+    if u == 'cid': return jsonify({'status': 'error', 'message': _t('Não pode apagar o admin principal.')})
     users = load_users()
-    if username in users:
-        del users[username]
+    if u in users:
+        del users[u]
         save_users(users)
-        log_user_action(session.get('username'), f"Deleted user: {username}")
-        return jsonify({'status': 'success', 'message': 'Utilizador apagado.'})
-    return jsonify({'status': 'error', 'message': 'Utilizador não encontrado.'})
+        log_user_action(session.get('username'), f"Deleted user {u}")
+        return jsonify({'status': 'success', 'message': _t('Utilizador apagado.')})
+    return jsonify({'status': 'error', 'message': _t('Não encontrado.')})
+
+@app.route('/api/users/change_password', methods=['POST'])
+@login_required
+def change_password():
+    data = request.get_json()
+    u = session['username']
+    users = load_users()
+    
+    if not session.get('is_dev'):
+        if not check_password_hash(users[u]['password'], data['current_password']):
+            return jsonify({'status': 'error', 'message': _t('Password atual incorreta.')})
+            
+    users[u]['password'] = generate_password_hash(data['new_password'])
+    save_users(users)
+    log_user_action(u, "Changed password")
+    return jsonify({'status': 'success', 'message': _t('Password alterada.')})
+
+@app.route('/api/log_files')
+@login_required
+def get_log_files():
+    try:
+        files = [f for f in os.listdir(BASE_LOG_PATH) if f.endswith('.log') and os.path.isfile(os.path.join(BASE_LOG_PATH, f))]
+        return jsonify({'files': sorted(files)})
+    except Exception as e:
+        return jsonify({'files': [], 'error': str(e)})
+
+@app.route('/logs')
+@login_required
+def get_logs():
+    filename = request.args.get('file', 'backup_server.log')
+    filepath = os.path.join(BASE_LOG_PATH, filename)
+    if not os.path.exists(filepath): return jsonify({'logs': [_t("Ficheiro não encontrado.")]})
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        return jsonify({'logs': [line.strip() for line in lines[-500:]]})
+    except Exception as e:
+        return jsonify({'logs': [f"{_t('Erro ao ler logs:')} {e}"]})
+
+@app.route('/clear_logs', methods=['POST'])
+@login_required
+def clear_logs():
+    data = request.get_json()
+    filename = data.get('file', 'backup_server.log')
+    filepath = os.path.join(BASE_LOG_PATH, filename)
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"--- Log limpo em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        log_user_action(session.get('username'), f"Cleared log file {filename}")
+        return jsonify({'status': 'success', 'message': _t('Log limpo com sucesso.')})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/download_logs')
+@login_required
+def download_logs():
+    filename = request.args.get('file', 'backup_server.log')
+    filepath = os.path.join(BASE_LOG_PATH, filename)
+    if os.path.exists(filepath):
+        log_user_action(session.get('username'), f"Downloaded log file {filename}")
+        return send_file(filepath, as_attachment=True)
+    return _t("Ficheiro não encontrado"), 404
+
+@app.route('/set_lang', methods=['POST'])
+def set_lang():
+    data = request.get_json()
+    lang = data.get('lang', DEFAULT_LANG)
+    if lang in SUPPORTED_LANGUAGES:
+        response = jsonify({'status': 'success'})
+        response.set_cookie('ui_lang', lang, max_age=60*60*24*365)
+        return response
+    return jsonify({'status': 'error'}), 400
 
 def get_ip_address():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(('10.255.255.255', 1))
-        ip = s.getsockname()[0]
-    except Exception:
-        ip = '127.0.0.1'
-    finally:
-        s.close()
-    return ip
-# Inicializa a variável global imediatamente antes das funções para garantir que o Python a encontra
-ssh_terminals_process = None
-
-def start_ssh_terminals_portal():
-    global ssh_terminals_process
-    if ssh_terminals_process and ssh_terminals_process.poll() is None:
-        return True
-    
-    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gestor_terminais_ssh.py')
-    if not os.path.exists(script_path):
-        logging.error("Ficheiro gestor_terminais_ssh.py não encontrado!")
-        return False
-        
-    command = [sys.executable, script_path]
-    try:
-        ssh_terminals_process = subprocess.Popen(command)
-        logging.info("Portal Gestor SSH Iniciado no processo PID: " + str(ssh_terminals_process.pid))
-        return True
-    except Exception as e:
-        logging.error(f"Erro ao iniciar portal Gestor SSH: {e}")
-        return False
-
-def stop_ssh_terminals_portal():
-    global ssh_terminals_process
-    if ssh_terminals_process:
-        if ssh_terminals_process.poll() is None:
-            try:
-                parent = psutil.Process(ssh_terminals_process.pid)
-                for child in parent.children(recursive=True): child.terminate()
-                parent.terminate()
-                parent.wait(timeout=5)
-            except: ssh_terminals_process.kill()
-        ssh_terminals_process = None
-
-atexit.register(stop_ssh_terminals_portal)
+        return s.getsockname()[0]
+    except: return '127.0.0.1'
+    finally: s.close()
 
 if __name__ == '__main__':
-    pid = str(os.getpid())
-    pid_file = os.path.join(BASE_DIR, "backup_server.pid")
-    with open(pid_file, 'w') as f: f.write(pid)
-    
-    start_ssh_terminals_portal()
     start_file_copying_service()
     start_mirror_ssd_service()
     start_all_active_mosaics()
-    start_public_portal()
-    start_pen_pkiris_portal()
     start_pkiris_service()
     start_historicos_service()
     start_artigos_service()
+    start_public_portal()
+    start_pen_pkiris_portal()
     
-    local_ip = get_ip_address()
-    logging.info("=====================================================")
-    logging.info("🚀 SISTEMA AVANÇADO BA - BACKUPS & MOSAICO INICIADO")
-    logging.info(f"👉 Acesse o Painel de Controlo: http://{local_ip}:5580")
-    logging.info(f"👉 Portal Público (Histórico):  http://{local_ip}:5581")
-    logging.info(f"👉 Portal Pen PKIRIS:           http://{local_ip}:5582")
-    logging.info(f"👉 Gestor Terminais SSH:        http://{local_ip}:5583")
-    logging.info("=====================================================")
-    
-    app.run(host='0.0.0.0', port=5580, threaded=True, debug=False)
+    ssh_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gestor_terminais_ssh.py')
+    if os.path.exists(ssh_script):
+        try:
+            ssh_terminals_process = subprocess.Popen([sys.executable, ssh_script])
+            logging.info(f"Portal de Terminais SSH Iniciado (PID: {ssh_terminals_process.pid})")
+            atexit.register(lambda: ssh_terminals_process.kill() if ssh_terminals_process else None)
+        except Exception as e:
+            logging.error(f"Erro ao iniciar portal SSH: {e}")
+
+    host_ip = get_ip_address()
+    logging.info(f"🚀 Servidor em: http://{host_ip}:5580")
+    app.run(host='0.0.0.0', port=5580, threaded=True)
